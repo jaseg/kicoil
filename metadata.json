@@ -24,7 +24,7 @@
             "kicad_version": "9.00",
             "download_sha256": "8c1f66c91fab315d76d640da1d197463412e4ee3d855428c37a5c66414b26b76",
             "download_size": 38942,
-            "download_url": "https://git.jaseg.de/kimesh.git/plain/de.jaseg.kicoil-v0.9.0.zip?h=v0.9.0",
+            "download_url": "https://git.jaseg.de/kicoil.git/plain/de.jaseg.kicoil-v0.9.0.zip?h=v0.9.0",
             "install_size": 119659
         },
         {
@@ -33,7 +33,7 @@
             "kicad_version": "9.00",
             "download_sha256": "455879f51a288ffc399f62556b1d83dc4988349f1759ddb283d711f72406310a",
             "download_size": 1886869,
-            "download_url": "https://git.jaseg.de/kimesh.git/plain/de.jaseg.kicoil-v0.11.0.zip?h=v0.11.0",
+            "download_url": "https://git.jaseg.de/kicoil.git/plain/de.jaseg.kicoil-v0.11.0.zip?h=v0.11.0",
             "install_size": 14353567
         },
         {
@@ -42,7 +42,7 @@
             "kicad_version": "9.00",
             "download_sha256": "8494927da4d4aca48baf13d6c8a162dc910c0be1294e5a44517b7d27a086a140",
             "download_size": 1886906,
-            "download_url": "https://git.jaseg.de/kimesh.git/plain/de.jaseg.kicoil-v0.11.1.zip?h=v0.11.1",
+            "download_url": "https://git.jaseg.de/kicoil.git/plain/de.jaseg.kicoil-v0.11.1.zip?h=v0.11.1",
             "install_size": 14353726
         }
     ],

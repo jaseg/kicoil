@@ -100,7 +100,7 @@ def do_release(dry_run):
     # Add the zip's metadata to the metadata for the repository
     ver_dict['download_sha256'] = hashlib.sha256(zip_fn.read_bytes()).hexdigest()
     ver_dict['download_size'] = zip_fn.stat().st_size
-    ver_dict['download_url'] = f'https://git.jaseg.de/kimesh.git/plain/{zip_fn.name}?h=v{version}'
+    ver_dict['download_url'] = f'https://git.jaseg.de/kicoil.git/plain/{zip_fn.name}?h=v{version}'
     ver_dict['install_size'] = tree_size(pkg_dir)
 
     if not dry_run:
