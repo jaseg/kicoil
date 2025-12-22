@@ -261,7 +261,7 @@ class Skeletonator:
             return min(r1, max(r2, r))
         
         dr = r2 - r1
-        r_step_per_turn = dr / (t2 - t1)
+        r_step_per_turn = dr / abs(t2 - t1)
         poly = self.poly
 
         def project_angles(r_ref, t0=0):
@@ -273,14 +273,21 @@ class Skeletonator:
                 yield angle
                 angle += edge_angle
 
-        turns = list(range(math.floor(t1), math.ceil(t2)))
+        turns = list(range(math.floor(min(t1, t2)), math.ceil(max(t1, t2))))
         if debug:
             print('turns:', ' '.join([f'{x:5.2f}' for x in turns]))
+        
         reference_radii = [r1 + (r2-r1)*(t-turns[0])/(turns[-1]-turns[0]) if turns[-1] != turns[0] else r1 for t in turns]
+        if t2 < t1:
+            reference_radii = reference_radii[::-1]
+
         reference_angles = [list(project_angles(r_ref, t0=t)) for t, r_ref in zip(turns, reference_radii)]
         reference_angles.append([turns[-1] + 1])
         reference_radii.append(reference_radii[-1])
 
+        if t2 < t1:
+            reference_angles = [ts[::-1] for ts in reference_angles[::-1]]
+            poly = poly[::-1]
 
         if debug:
             print('r_ref:', ' '.join([f'{x:5.2f}' for x in reference_radii]))
@@ -288,11 +295,11 @@ class Skeletonator:
                 print(' '.join(f'{x:5.3f}' for x in foo))
         
         debug_arm = []
-        for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles), itertools.chain(*reference_angles)))):
-            if approx_in_range(min(t1, t2), tp1, tp2):
+        for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles) if t1 < t2 else poly[-1:] + poly*len(reference_angles), itertools.chain(*reference_angles)))):
+            if (tp2 > tp1 and approx_in_range(t1, tp1, tp2)) or (tp1 > tp2 and approx_in_range(t1, tp2, tp1)):
                 _arc, p1_proj = self.project_arc(p1, r1)
                 _arc, p2_proj = self.project_arc(p2, r1)
-                p_proj = interpolate(p1_proj, p2_proj, min(t1, t2), tp1, tp2)
+                p_proj = interpolate(p1_proj, p2_proj, t1, tp1, tp2)
                 debug_arm.append((p_proj, 1, False))
                 yield p_proj, r1
                 break
@@ -300,7 +307,7 @@ class Skeletonator:
         last_arc = None
         for r_ref, ts_ref in zip(reference_radii, reference_angles):
             for p, t in zip(poly, ts_ref):
-                if t > t1 and t < t2:
+                if (t1 < t < t2) or (t2 < t < t1):
                     r = r_interpolate(t)
                     arc, p_proj = self.project_arc(p, r)
                     if arc != last_arc:
@@ -308,93 +315,18 @@ class Skeletonator:
                         yield p_proj, r_ref
                     last_arc = arc
         
-        for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles), itertools.chain(*reference_angles)))):
-           if approx_in_range(max(t1, t2), tp1, tp2):
-               _arc, p1_proj = self.project_arc(p1, r2)
-               _arc, p2_proj = self.project_arc(p2, r2)
-               p_proj = interpolate(p1_proj, p2_proj, max(t1, t2), tp1, tp2)
-               debug_arm.append((p_proj, 2, False))
-               yield p_proj, r2
-               break
+        for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles) if t1 < t2 else poly[-1:] + poly*len(reference_angles), itertools.chain(*reference_angles)))):
+            if (tp2 > tp1 and approx_in_range(t2, tp1, tp2)) or (tp1 > tp2 and approx_in_range(t2, tp2, tp1)):
+                _arc, p1_proj = self.project_arc(p1, r2)
+                _arc, p2_proj = self.project_arc(p2, r2)
+                p_proj = interpolate(p1_proj, p2_proj, t2, tp1, tp2)
+                debug_arm.append((p_proj, 1, False))
+                yield p_proj, r2
+                break
 
         if debug:
-            self.debug_arms.append((debug_arm, True, t1, t2))
+            self.debug_arms.append((debug_arm, t1 > t2, t1, t2))
 
-        return
-
-        match_p2, match_t = None, None
-        debug_arm = []
-        for t_start in range(math.ceil(t2-t1)):
-            t_start += t1
-            t_end = t_start + 1
-            r_outer = r_interpolate(t_start)
-            r_inner = r_interpolate(t_end)
-            r_ref = min(r_inner, r_outer) # Handle outward spirals where the radii are swapped
-            _ic_arcs, inner_circumference = self.map_circumference(r_ref)
-
-            print(f'  segment {t_start:5.3f} - {t_end:5.3f}')
-
-            angle = math.floor(t_start)
-            circumference_angles = []
-            inner_circumference_sum = sum(math.dist(p1, p2) for p1, p2 in edge_cycle(inner_circumference))
-            point_angles = []
-            for p1, p2 in edge_cycle(inner_circumference):
-                edge_angle = math.dist(p1, p2) / inner_circumference_sum
-                point_angles.append(angle)
-                angle += edge_angle
-
-            for i, (p, t) in enumerate(zip(self.poly, point_angles)):
-                if p == match_p2:
-                    delta_t = t - match_t
-                    print(f'  match is {i} adjust by {delta_t}')
-                    for j in range(0, i):
-                        point_angles[j] += delta_t / i
-                    for j in range(i, len(point_angles)):
-                        point_angles[j] -= delta_t / (len(point_angles) - i)
-                    break
-            
-            point_angles += [a+1 for a in point_angles]
-            point_angles += [point_angles[0] + 2]
-
-            i, j, k = 0, 0, 0
-            for (p1, p2), (tp1, tp2) in zip(self.poly_edges * 3, itertools.pairwise(point_angles)):
-                i += 1
-                rp1 = r_interpolate(tp1)
-                rp2 = r_interpolate(tp2)
-                _arc, p1_proj = self.project_arc(p1, rp1)
-                _arc, p2_proj = self.project_arc(p2, rp2)
-                if tp2 < t_start and not math.isclose(tp2, t_start):
-                    continue
-                if tp2 > t_end and not math.isclose(tp1, t_end):
-                    continue
-                if debug:
-                    k += 1
-                    print(f'  {(i-1)%len(self.poly_edges):>2d} {tp1:.3f} ... {tp2:.3f}', end=('    ' if k%6 else '\n'))
-                
-                if approx_in_range(t1, tp1, tp2):
-                    _arc, p2_proj_r1 = self.project_arc(p2, r1)
-                    p_out = interpolate(p1_proj, p2_proj_r1, t1, tp1, tp2)
-                    debug_arm.append((p_out, 1, j == 0))
-                    j += 1
-                    yield p_out, r_ref
-
-                if approx_in_range(t2, tp1, tp2):
-                    _arc, p1_proj_r2 = self.project_arc(p1, r2)
-                    p_out = interpolate(p1_proj_r2, p2_proj, t2, tp1, tp2)
-                    debug_arm.append((p_out, 2, j == 0))
-                    j += 1
-                    yield p_out, r_ref
-
-                elif approx_in_range(tp2, t_start, t_end):
-                    debug_arm.append((p2_proj, 3, j == 0))
-                    j += 1
-                    match_p2, match_t = p2, tp2 
-                    yield p2_proj, r_ref
-            if debug:
-                print()
-        if debug:
-            self.debug_arms.append((debug_arm, direction, t1, t2))
-            print()
 
     def dump_to_pdf(self, filename):
         import matplotlib.pyplot as plt
