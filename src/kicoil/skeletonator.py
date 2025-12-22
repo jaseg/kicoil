@@ -254,6 +254,9 @@ class Skeletonator:
             t1, t2 = t2, t1
             r1, r2 = r2, r1
 
+        if debug:
+            print(f'{t1:5.3f} - {t2:5.3f} : {r1:4.1f} - {r2:4.1f}')
+
         def r_interpolate(t):
             t = max(t1, min(t2, t)) # Clip to start/end of spiral
             f = (t - t1) / (t2 - t1)
@@ -268,6 +271,8 @@ class Skeletonator:
             r_ref = min(r_inner, r_outer) # Handle outward spirals where the radii are swapped
             _ic_arcs, inner_circumference = self.map_circumference(r_ref)
 
+            print(f'  segment {t_start:5.3f} - {t_end:5.3f}')
+
             angle = math.floor(t_start)
             circumference_angles = []
             inner_circumference_sum = sum(math.dist(p1, p2) for p1, p2 in edge_cycle(inner_circumference))
@@ -279,7 +284,7 @@ class Skeletonator:
             point_angles += [a+1 for a in point_angles]
             point_angles += [point_angles[0] + 2]
 
-            i = 0
+            i, j, k = 0, 0, 0
             for (p1, p2), (tp1, tp2) in zip(self.poly_edges * 3, itertools.pairwise(point_angles)):
                 i += 1
                 rp1 = r_interpolate(tp1)
@@ -290,24 +295,33 @@ class Skeletonator:
                     continue
                 if tp1 > t_end and not math.isclose(tp1, t_end):
                     continue
+                if debug:
+                    k += 1
+                    print(f'  {(i-1)%len(self.poly_edges):>2d} {tp1:.3f} ... {tp2:.3f}', end=('    ' if k%6 else '\n'))
                 
                 if approx_in_range(t1, tp1, tp2):
                     _arc, p2_proj_r1 = self.project_arc(p2, r1)
                     p_out = interpolate(p1_proj, p2_proj_r1, t1, tp1, tp2)
-                    debug_arm.append(p_out)
+                    debug_arm.append((p_out, 1, j == 0))
+                    j += 1
                     yield p_out, r_ref
 
                 if approx_in_range(t2, tp1, tp2):
                     _arc, p1_proj_r2 = self.project_arc(p1, r2)
                     p_out = interpolate(p1_proj_r2, p2_proj, t2, tp1, tp2)
-                    debug_arm.append(p_out)
+                    debug_arm.append((p_out, 2, j == 0))
+                    j += 1
                     yield p_out, r_ref
 
-                elif approx_in_range(tp2, t1, t2):
-                    debug_arm.append(p2_proj)
-                    yield p2_proj, r_ref
+                elif approx_in_range(tp1, t_start, t_end):
+                    debug_arm.append((p1_proj, 3, j == 0))
+                    j += 1
+                    yield p1_proj, r_ref
+            if debug:
+                print()
         if debug:
             self.debug_arms.append((debug_arm, direction, t1, t2))
+            print()
 
     def dump_to_pdf(self, filename):
         import matplotlib.pyplot as plt
@@ -334,9 +348,20 @@ class Skeletonator:
 
         count = {True: 0, False: 0}
         for arm, direction, t1, t2 in self.debug_arms:
-            xs = [x for x, y in arm]
-            ys = [y for x, y in arm]
+
+            for case_filter in [1, 2]:
+                xs = [x for (x, y), case, start in arm if case == case_filter]
+                ys = [y for (x, y), case, start in arm if case == case_filter]
+                ax.plot(xs, ys, 'o', linestyle='none', markersize=4, markeredgecolor='red' if case_filter == 1 else 'blue')
+
+            xs = [x for (x, y), case, start in arm if start]
+            ys = [y for (x, y), case, start in arm if start]
+            ax.plot(xs, ys, 'o', linestyle='none', markersize=2, markeredgecolor='black')
+            
+            xs = [x for (x, y), case, start in arm]
+            ys = [y for (x, y), case, start in arm]
             ax.plot(xs, ys, linewidth=.2, color='red' if direction else 'blue')
+
             align = 'left' if direction else 'right'
             ax.text(xs[-1], ys[-1], f'{count[direction]}', size=3, horizontalalignment=align)
             ax.text(xs[0], ys[0], f'{count[direction]}', size=3, horizontalalignment=align, color='gray')
