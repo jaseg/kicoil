@@ -295,43 +295,50 @@ class Skeletonator:
                 print(' '.join(f'{x:5.3f}' for x in foo))
         
         debug_arm = []
+        i = 0
         for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles) if t1 < t2 else poly[-1:] + poly*len(reference_angles), itertools.chain(*reference_angles)))):
             if (tp2 > tp1 and approx_in_range(t1, tp1, tp2)) or (tp1 > tp2 and approx_in_range(t1, tp2, tp1)):
                 _arc, p1_proj = self.project_arc(p1, r1)
                 _arc, p2_proj = self.project_arc(p2, r1)
                 p_proj = interpolate(p1_proj, p2_proj, t1, tp1, tp2)
-                debug_arm.append((p_proj, 1, False))
+                debug_arm.append((p_proj, 1, False, r1, i))
                 yield p_proj, r1
                 break
+            i += 1
 
         last_arc = None
         for r_ref, ts_ref in zip(reference_radii, reference_angles):
+            i = 0
             for p, t in zip(poly, ts_ref):
                 if (t1 < t < t2) or (t2 < t < t1):
                     r = r_interpolate(t)
                     arc, p_proj = self.project_arc(p, r)
                     if arc != last_arc:
-                        debug_arm.append((p_proj, 3, False))
+                        debug_arm.append((p_proj, 3, False, r, i))
                         yield p_proj, r_ref
                     last_arc = arc
+                i += 1
         
+        i = 0
         for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles) if t1 < t2 else poly[-1:] + poly*len(reference_angles), itertools.chain(*reference_angles)))):
             if (tp2 > tp1 and approx_in_range(t2, tp1, tp2)) or (tp1 > tp2 and approx_in_range(t2, tp2, tp1)):
                 _arc, p1_proj = self.project_arc(p1, r2)
                 _arc, p2_proj = self.project_arc(p2, r2)
                 p_proj = interpolate(p1_proj, p2_proj, t2, tp1, tp2)
-                debug_arm.append((p_proj, 1, False))
+                debug_arm.append((p_proj, 2, False, r2, i%len(poly)))
                 yield p_proj, r2
                 break
+            i += 1
 
-        if debug:
+        if debug and t1 > t2:
             self.debug_arms.append((debug_arm, t1 > t2, t1, t2))
 
 
     def dump_to_pdf(self, filename):
         import matplotlib.pyplot as plt
     
-        fig, ax = plt.subplots(figsize=(10, 10))
+        fig, axs = plt.subplots(2, 1, figsize=(10, 20))
+        ax = axs.flatten()[0]
 
         # polygon outline
         poly_x = [p[0] for p in self.poly] + [self.poly[0][0]]
@@ -355,21 +362,29 @@ class Skeletonator:
         for arm, direction, t1, t2 in self.debug_arms:
 
             for case_filter in [1, 2]:
-                xs = [x for (x, y), case, start in arm if case == case_filter]
-                ys = [y for (x, y), case, start in arm if case == case_filter]
+                xs = [x for (x, y), case, start, r, i in arm if case == case_filter]
+                ys = [y for (x, y), case, start, r, i in arm if case == case_filter]
                 ax.plot(xs, ys, 'o', linestyle='none', markersize=4, markeredgecolor='red' if case_filter == 1 else 'blue')
 
-            xs = [x for (x, y), case, start in arm if start]
-            ys = [y for (x, y), case, start in arm if start]
+            xs = [x for (x, y), case, start, r, i in arm if start]
+            ys = [y for (x, y), case, start, r, i in arm if start]
             ax.plot(xs, ys, 'o', linestyle='none', markersize=2, markeredgecolor='black')
             
-            xs = [x for (x, y), case, start in arm]
-            ys = [y for (x, y), case, start in arm]
+            xs = [x for (x, y), case, start, r, i in arm]
+            ys = [y for (x, y), case, start, r, i in arm]
             ax.plot(xs, ys, linewidth=.2, color='red' if direction else 'blue')
 
             align = 'left' if direction else 'right'
             ax.text(xs[-1], ys[-1], f'{count[direction]}', size=3, horizontalalignment=align)
             ax.text(xs[0], ys[0], f'{count[direction]}', size=3, horizontalalignment=align, color='gray')
+
+            ax2 = axs.flatten()[1]
+            xs = [i for p, case, start, r, i in arm]
+            ys = [r for p, case, start, r, i in arm]
+            ax2.plot(xs, ys, linewidth=.2, color='red' if direction else 'blue')
+            ax2.text(xs[-1], ys[-1], f'{count[direction]}')
+            ax2.text(xs[0], ys[0], f'{count[direction]}')
+
             count[direction] += 1
 
         xs, ys = [], []
@@ -387,5 +402,6 @@ class Skeletonator:
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
         ax.invert_yaxis()
+
         fig.savefig(filename, bbox_inches='tight', dpi=600)
         plt.close(fig)
