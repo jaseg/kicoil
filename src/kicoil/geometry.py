@@ -406,10 +406,6 @@ class PlanarInductor():
         alpha = (alpha1+alpha2)/2
         self.projected_spiral_pitch = self.spiral_pitch*cos(alpha)
 
-        if self.layers == 1 and self.twists > 1:
-            warnings.warn('Warning: Twists set to a value other than 1, but single-layer mode is enabled. The twists value will be ignored.')
-            self.twists = 1
-
         if self.turns < 1:
             raise ValueError(f'Error: PlanarInductor.turns must be 1 or more')
 

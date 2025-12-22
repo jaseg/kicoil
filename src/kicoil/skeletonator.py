@@ -249,19 +249,80 @@ class Skeletonator:
             r2 = self.min_radius
 
         direction = True
-        if t2 < t1:
-            direction = False
-            t1, t2 = t2, t1
-            r1, r2 = r2, r1
 
         if debug:
-            print(f'{t1:5.3f} - {t2:5.3f} : {r1:4.1f} - {r2:4.1f}')
+            print()
+            print(f'ARM {t1:5.3f} - {t2:5.3f} : {r1:5.2f} - {r2:5.2f}')
 
         def r_interpolate(t):
-            t = max(t1, min(t2, t)) # Clip to start/end of spiral
             f = (t - t1) / (t2 - t1)
-            return r1 + (r2 - r1) * f
+            r = r1 + (r2 - r1) * f
+            # Clip to start/end of spiral
+            return min(r1, max(r2, r))
         
+        dr = r2 - r1
+        r_step_per_turn = dr / (t2 - t1)
+        poly = self.poly
+
+        def project_angles(r_ref, t0=0):
+            angle = t0
+            _ic_arcs, inner_circumference = self.map_circumference(r_ref)
+            inner_circumference_sum = sum(math.dist(p1, p2) for p1, p2 in edge_cycle(inner_circumference))
+            for p1, p2 in edge_cycle(inner_circumference):
+                edge_angle = math.dist(p1, p2) / inner_circumference_sum
+                yield angle
+                angle += edge_angle
+
+        turns = list(range(math.floor(t1), math.ceil(t2)))
+        if debug:
+            print('turns:', ' '.join([f'{x:5.2f}' for x in turns]))
+        reference_radii = [r1 + (r2-r1)*(t-turns[0])/(turns[-1]-turns[0]) if turns[-1] != turns[0] else r1 for t in turns]
+        reference_angles = [list(project_angles(r_ref, t0=t)) for t, r_ref in zip(turns, reference_radii)]
+        reference_angles.append([turns[-1] + 1])
+        reference_radii.append(reference_radii[-1])
+
+
+        if debug:
+            print('r_ref:', ' '.join([f'{x:5.2f}' for x in reference_radii]))
+            for foo in reference_angles:
+                print(' '.join(f'{x:5.3f}' for x in foo))
+        
+        debug_arm = []
+        for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles), itertools.chain(*reference_angles)))):
+            if approx_in_range(min(t1, t2), tp1, tp2):
+                _arc, p1_proj = self.project_arc(p1, r1)
+                _arc, p2_proj = self.project_arc(p2, r1)
+                p_proj = interpolate(p1_proj, p2_proj, min(t1, t2), tp1, tp2)
+                debug_arm.append((p_proj, 1, False))
+                yield p_proj, r1
+                break
+
+        last_arc = None
+        for r_ref, ts_ref in zip(reference_radii, reference_angles):
+            for p, t in zip(poly, ts_ref):
+                if t > t1 and t < t2:
+                    r = r_interpolate(t)
+                    arc, p_proj = self.project_arc(p, r)
+                    if arc != last_arc:
+                        debug_arm.append((p_proj, 3, False))
+                        yield p_proj, r_ref
+                    last_arc = arc
+        
+        for (p1, tp1), (p2, tp2) in edge_cycle(list(zip(poly*len(reference_angles), itertools.chain(*reference_angles)))):
+           if approx_in_range(max(t1, t2), tp1, tp2):
+               _arc, p1_proj = self.project_arc(p1, r2)
+               _arc, p2_proj = self.project_arc(p2, r2)
+               p_proj = interpolate(p1_proj, p2_proj, max(t1, t2), tp1, tp2)
+               debug_arm.append((p_proj, 2, False))
+               yield p_proj, r2
+               break
+
+        if debug:
+            self.debug_arms.append((debug_arm, True, t1, t2))
+
+        return
+
+        match_p2, match_t = None, None
         debug_arm = []
         for t_start in range(math.ceil(t2-t1)):
             t_start += t1
@@ -281,6 +342,17 @@ class Skeletonator:
                 edge_angle = math.dist(p1, p2) / inner_circumference_sum
                 point_angles.append(angle)
                 angle += edge_angle
+
+            for i, (p, t) in enumerate(zip(self.poly, point_angles)):
+                if p == match_p2:
+                    delta_t = t - match_t
+                    print(f'  match is {i} adjust by {delta_t}')
+                    for j in range(0, i):
+                        point_angles[j] += delta_t / i
+                    for j in range(i, len(point_angles)):
+                        point_angles[j] -= delta_t / (len(point_angles) - i)
+                    break
+            
             point_angles += [a+1 for a in point_angles]
             point_angles += [point_angles[0] + 2]
 
@@ -293,7 +365,7 @@ class Skeletonator:
                 _arc, p2_proj = self.project_arc(p2, rp2)
                 if tp2 < t_start and not math.isclose(tp2, t_start):
                     continue
-                if tp1 > t_end and not math.isclose(tp1, t_end):
+                if tp2 > t_end and not math.isclose(tp1, t_end):
                     continue
                 if debug:
                     k += 1
@@ -313,10 +385,11 @@ class Skeletonator:
                     j += 1
                     yield p_out, r_ref
 
-                elif approx_in_range(tp1, t_start, t_end):
-                    debug_arm.append((p1_proj, 3, j == 0))
+                elif approx_in_range(tp2, t_start, t_end):
+                    debug_arm.append((p2_proj, 3, j == 0))
                     j += 1
-                    yield p1_proj, r_ref
+                    match_p2, match_t = p2, tp2 
+                    yield p2_proj, r_ref
             if debug:
                 print()
         if debug:
