@@ -421,6 +421,7 @@ class PlanarInductor():
     layer_pair: str = 'F.Cu,B.Cu'
     clockwise: bool = False
     approximate_arcs: bool = True
+    arm_phase: float = 0.0
 
     def __post_init__(self):
         self.logger = logging.getLogger('kicoil')
@@ -566,7 +567,7 @@ class PlanarInductor():
     def arm_angles(self, i):
         """ Start, fold and end angle of the i'th arm pair. The arm on the first layer runs inwards from the start to the
         fold angle, the arm on the second layer runs outwards from the fold to the end angle. """
-        start_angle = i*self.sector_angle
+        start_angle = i*self.sector_angle + radians(self.arm_phase)
         fold_angle = start_angle + self.sweeping_angle
         end_angle = fold_angle + self.sweeping_angle
         return start_angle, fold_angle, end_angle

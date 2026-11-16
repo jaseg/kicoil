@@ -669,6 +669,13 @@ class KiCoilGUI:
         ttk.Checkbutton(parent, text="Stagger outer via ring", 
                        variable=self.stagger_outer_var).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
         row += 1
+
+        # Arm Phase
+        ttk.Label(parent, text="Arm Phase (°):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self.arm_phase_var = tk.DoubleVar(value=0.0)
+        ttk.Spinbox(parent, from_=-180, to=180, increment=1,
+                   textvariable=self.arm_phase_var, width=15).grid(row=row, column=1, sticky=tk.W, pady=5)
+        row += 1
         
     def create_output_params(self, parent):
         row = 0
@@ -787,6 +794,7 @@ class KiCoilGUI:
             'via_diameter'       : self.via_diameter_var.get(),
             'stagger_inner_vias' : self.stagger_inner_var.get(),
             'stagger_outer_vias' : self.stagger_outer_var.get(),
+            'arm_phase'          : self.arm_phase_var.get(),
             'layer_pair'         : f"{self.top_layer_var.get()},{self.bottom_layer_var.get()}",
         }
 
@@ -832,6 +840,7 @@ class KiCoilGUI:
                     self.via_diameter_var,
                     self.stagger_inner_var,
                     self.stagger_outer_var,
+                    self.arm_phase_var,
                     self.top_layer_var,
                     self.bottom_layer_var,
                     # Circle shape params
