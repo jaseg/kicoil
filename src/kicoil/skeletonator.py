@@ -1,4 +1,5 @@
 import math
+import copy
 import itertools
 import os
 from tempfile import NamedTemporaryFile
@@ -32,6 +33,9 @@ ANGLE_REFERENCE_SAMPLES = 32
 TIME_EPS = 1e-9
 ANGLE_EPS = 1e-9
 ANGLE_GRID = 2**40 # vertex angles are multiples of 1/ANGLE_GRID, exact in sums with integers below 2**12
+
+RAMP_MARGIN = 1e-3 # mm from the corners to the ramps of the flat corner layout; closer points give zero-length tracks
+FLAT_CORNER_STEP = 1e-6 # revolutions, angle span in front of the corner of a flat stretch, see flat_corners
 
 
 def interpolate(p1, p2, t, t_start=0, t_end=1):
@@ -378,6 +382,67 @@ class Skeletonator:
             arm = [(p, kind, False, self.radius - d, i) for p, (kind, d, i) in zip(points, info)]
             self.debug_arms.append((arm, d1 > d2, t1, t2))
         return points, angles
+
+    def flat_corners(self, depth):
+        """ A copy of this skeletonator whose spirals keep their depth around the corners, down to the given depth, and
+        change it only on a ramp in the middle of each edge. Returns None if no edge has room for a ramp. """
+        poly, tracks, spans = [], [], []
+        vertex, collapses = [], [] # per point: its vertex of self.poly (None on a ramp), whether its edge collapses
+        min_len, turns = self._min_edge_lengths(depth), abs(turn_angles(self.poly))
+        for i, ((x0, y0), (x1, y1)) in enumerate(edge_cycle(self.poly)):
+            j = (i + 1) % len(self.poly)
+            length = math.dist((x0, y0), (x1, y1))
+            ex, ey = (x1 - x0) / length, (y1 - y0) / length
+
+            def along_edge(v):
+                """ Positions of vertex v along the edge at every depth where its track bends """
+                depths = [0.0, depth, *(t for t in self._track_times[v] if 0 < t < depth)]
+                return [(x - x0)*ex + (y - y0)*ey for x, y in (self.track_position(v, d) for d in depths)]
+
+            def ramp_track(u, v, sign):
+                """ Track of the point at u along the edge, on the edge's offset line. Outside the depths [0, depth],
+                where only vias go, it stops at vertex v once v's track gets past it. """
+                def at(d):
+                    return SkeletonNode(x0 + u*ex - d*ey, y0 + u*ey + d*ex, d)
+
+                def clamped(n):
+                    return n if sign * ((n.x - x0)*ex + (n.y - y0)*ey - u) > 0 else at(n.time)
+                outward = SkeletonNode(*self.track_position(v, -depth), -depth)
+                deeper = [n for n in self.tracks[v] if n.time > depth]
+                return [clamped(outward), at(0.0), at(depth)] + [clamped(n) for n in deeper]
+
+            poly.append(self.poly[i])
+            tracks.append(self.tracks[i])
+            vertex.append(i)
+            # The ramp lies between the two corners at every depth
+            lo, hi = max(along_edge(i)) + RAMP_MARGIN, min(along_edge(j)) - RAMP_MARGIN
+            if hi - lo > RAMP_MARGIN:
+                poly += [(x0 + lo*ex, y0 + lo*ey), (x0 + hi*ex, y0 + hi*ey)]
+                tracks += [ramp_track(lo, i, 1), ramp_track(hi, j, -1)]
+                spans += [0.0, hi - lo, 0.0]
+                vertex += [None, None]
+                collapses += [False, False, False]
+            else:
+                spans.append(0.0)
+                collapses.append(min_len[i] <= RAMP_MARGIN)
+        if not any(spans):
+            return None
+        # An arm that starts or ends on a flat stretch, and its via, belong at its sharpest corner, not at its start. A
+        # tiny span in front of that corner makes it the first point at the stretch's angle. The edge with that span
+        # must not collapse (its ends would come out as a hairpin), else it goes on the edge before.
+        n, ramps, step = len(spans), [s > 0 for s in spans], FLAT_CORNER_STEP * sum(spans)
+        for k in range(n):
+            if ramps[k]: # the flat stretch runs from the ramp's end, point k + 1, to the next ramp's start
+                end = next(m for m in itertools.count(k + 1) if ramps[m % n])
+                corner = max(range(k + 2, end), key=lambda m: turns[vertex[m % n]])
+                spans[max(e for e in range(k + 1, corner) if not collapses[e % n]) % n] = step
+
+        flat = copy.copy(self)
+        flat.poly, flat.tracks = poly, tracks
+        flat._track_times = [[node.time for node in track] for track in tracks]
+        # Each ramp gets an angle span (and so a depth change) proportional to its length
+        flat._set_edge_spans(spans)
+        return flat
 
     def dump_to_pdf(self, filename):
         import matplotlib.pyplot as plt

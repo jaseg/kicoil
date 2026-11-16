@@ -217,6 +217,7 @@ class OffsetShape(Shape):
         self.max_via_offset = self.sk.max_depth - self.annular_width
         self.outer_radius = self.sk.radius
         self.inner_radius = self.sk.radius - self.annular_width
+        self.layout = self.sk # or its flat corner layout, see PlanarInductor._prepare_shape
 
     @property
     def slug(self):
@@ -230,12 +231,12 @@ class OffsetShape(Shape):
 
     def compute_spiral(self, a1, a2, fn=None, debug=False):
         # Skeletonator uses a t coordinate from 0 - 1 per revolution instead of a radian angle.
-        return self.sk.spiral(a1/(2*pi), a2/(2*pi), 0, self.annular_width, debug=debug)
+        return self.layout.spiral(a1/(2*pi), a2/(2*pi), 0, self.annular_width, debug=debug)
 
 
     def project_point(self, r, a):
         # Skeletonator uses a t coordinate from 0 - 1 per revolution instead of a radian angle.
-        return self.sk.project_point(a/(2*pi) % 1, self.sk.radius - r)
+        return self.layout.project_point(a/(2*pi) % 1, self.sk.radius - r)
 
 
     def offset_exterior(self, margin):
@@ -421,6 +422,7 @@ class PlanarInductor():
     layer_pair: str = 'F.Cu,B.Cu'
     clockwise: bool = False
     approximate_arcs: bool = True
+    flat_corners: bool = True
     arm_phase: float = 0.0
 
     def __post_init__(self):
@@ -451,6 +453,8 @@ class PlanarInductor():
         if (self.stagger_inner_vias or self.stagger_outer_vias) and self.twists%2 != 0:
             raise ValueError('For via staggering to work, twists must be even and turns must be odd.')
 
+        self._prepare_shape()
+
         # Neighboring turns come closer than the nominal pitch where they run at an angle to the outline, and at corners,
         # where their bends do not line up exactly. Instead of estimating this, measure the spiral center lines.
         pp, where = self.measure_turn_spacing()
@@ -461,6 +465,8 @@ class PlanarInductor():
             pitch_hint = (f' The projected pitch is the smallest distance between the center lines of neighboring '
                           f'turns, {pp:.3f} mm (nominal pitch {self.spiral_pitch:.3f} mm), measured near '
                           f'({where[0]:.3f}, {where[1]:.3f}).')
+            if hasattr(self.shape, 'sk') and self.shape.layout is not self.shape.sk:
+                pitch_hint += ' Turning off the flat corner layout may help.'
 
         if self.trace_width is None and self.clearance is None:
             self.clearance = 0.15
@@ -564,6 +570,13 @@ class PlanarInductor():
                 raise ValueError(message)
             warnings.warn(message)
 
+    def _prepare_shape(self):
+        """ Select the flat corner layout of polygonal shapes if flat_corners is set. Called again before rendering, in
+        case the shape object was used for another coil in between. """
+        if hasattr(self.shape, 'sk'):
+            flat = self.shape.sk.flat_corners(self.shape.annular_width) if self.flat_corners else None
+            self.shape.layout = flat or self.shape.sk
+
     def arm_angles(self, i):
         """ Start, fold and end angle of the i'th arm pair. The arm on the first layer runs inwards from the start to the
         fold angle, the arm on the second layer runs outwards from the fold to the end angle. """
@@ -646,6 +659,7 @@ class PlanarInductor():
                 clearance=self.clearance,
                 zone_connect=0)
 
+        self._prepare_shape()
         # Fit the arcs as closely as circle_segments points per revolution approximate the outer circle
         arc_tolerance = self.shape.outer_radius * (1 - cos(pi / circle_segments))
 

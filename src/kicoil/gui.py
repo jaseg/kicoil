@@ -670,6 +670,12 @@ class KiCoilGUI:
                        variable=self.stagger_outer_var).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
         row += 1
 
+        # Flat Corners
+        self.flat_corners_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(parent, text="Keep turn depth constant around corners",
+                       variable=self.flat_corners_var).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
+        row += 1
+
         # Arm Phase
         ttk.Label(parent, text="Arm Phase (°):").grid(row=row, column=0, sticky=tk.W, pady=5)
         self.arm_phase_var = tk.DoubleVar(value=0.0)
@@ -794,6 +800,7 @@ class KiCoilGUI:
             'via_diameter'       : self.via_diameter_var.get(),
             'stagger_inner_vias' : self.stagger_inner_var.get(),
             'stagger_outer_vias' : self.stagger_outer_var.get(),
+            'flat_corners'       : self.flat_corners_var.get(),
             'arm_phase'          : self.arm_phase_var.get(),
             'layer_pair'         : f"{self.top_layer_var.get()},{self.bottom_layer_var.get()}",
         }
@@ -840,6 +847,7 @@ class KiCoilGUI:
                     self.via_diameter_var,
                     self.stagger_inner_var,
                     self.stagger_outer_var,
+                    self.flat_corners_var,
                     self.arm_phase_var,
                     self.top_layer_var,
                     self.bottom_layer_var,
