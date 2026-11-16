@@ -132,7 +132,6 @@ def compute_skeleton(exterior):
         if p2 != p1:
             points_deduplicated.append(p1)
     input_data = '\n'.join(f'{x} {y}' for x, y in points_deduplicated)
-    Path('/tmp/debug.txt').write_text(input_data)
     
     rc, data = skeleton_wasm.run(input_data)
 
