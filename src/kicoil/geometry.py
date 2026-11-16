@@ -157,8 +157,10 @@ class OffsetShape(Shape):
     def __post_init__(self):
         self.sk = skeletonator.Skeletonator(self.polygon)
         self.polygon = list(self.sk.outline) # normalized: counter-clockwise, without repeated points
-        if self.annular_width > self.sk.max_depth:
+        if self.annular_width >= self.sk.max_depth:
             raise ValueError(f'Annular width ({self.annular_width:.2f}) is too large. Must be less than {self.sk.max_depth:.2f}')
+        if self.annular_width <= 0:
+            raise ValueError('Annular width must be positive')
         self.sk.set_angle_reference(self.annular_width)
         self.outer_radius = self.sk.radius
         self.inner_radius = self.sk.radius - self.annular_width
@@ -375,12 +377,19 @@ class PlanarInductor():
 
     def __post_init__(self):
         self.logger = logging.getLogger('kicoil')
+
+        if self.turns < 1:
+            raise ValueError(f'Error: PlanarInductor.turns must be 1 or more')
+
+        if self.twists < 1:
+            raise ValueError(f'Error: PlanarInductor.twists must be 1 or more')
+
         self.turns_per_layer = self.turns/self.layers
         self.sector_angle = 2*pi / self.twists
 
         if self.clockwise:
             self.sector_angle *= -1
-            
+
         self.sweeping_angle = self.sector_angle * self.turns_per_layer
         self.spiral_pitch = (self.shape.outer_radius-self.shape.inner_radius) / self.turns_per_layer
         self.R = None # will be calculated during render
@@ -391,12 +400,6 @@ class PlanarInductor():
         alpha2 = atan((self.shape.outer_radius - self.shape.inner_radius) / self.sweeping_angle / c2)
         alpha = (alpha1+alpha2)/2
         self.projected_spiral_pitch = self.spiral_pitch*cos(alpha)
-
-        if self.turns < 1:
-            raise ValueError(f'Error: PlanarInductor.turns must be 1 or more')
-
-        if self.twists < 0:
-            raise ValueError(f'Error: PlanarInductor.turns must be 0 or more')
 
         if gcd(self.twists, self.turns) != 1:
             raise ValueError(f'For the geometry to work out, the twists parameter must be co-prime to turns, i.e. the two must have 1 as their greatest common divisor. You can print valid values for twists by running the kicoil CLI with --show-twists [turns number].\n\n'
