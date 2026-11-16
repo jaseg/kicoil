@@ -19,6 +19,13 @@ import wasmtime
 # Points closer than this (mm) are one point
 DUPLICATE_POINT_TOLERANCE = 1e-6
 
+# The straight skeleton only gives mitered offsets. The miter of a reflex corner that turns by phi moves 1/cos(phi/2)
+# times as fast as the outline, so at a cusp it reaches far into the shape. Reflex corners that turn by more than
+# ROUND_JOINT_MIN_TURN get a small round notch of ROUND_JOINT_RADIUS (mm) instead, whose offsets are arcs.
+ROUND_JOINT_MIN_TURN = math.radians(120)
+ROUND_JOINT_RADIUS = 0.01
+ROUND_JOINT_SEGMENTS = 16 # per quarter circle
+
 # Number of depths at which set_angle_reference measures the edge lengths
 ANGLE_REFERENCE_SAMPLES = 32
 
@@ -55,6 +62,29 @@ def clean_polygon(points):
     if not ring.is_ccw:
         ring = ring.reverse()
     return list(ring.coords)[:-1]
+
+
+def turn_angles(points):
+    """ Turn angle in radians at each vertex of a counter-clockwise polygon, negative at reflex vertices. """
+    p = np.asarray(points, dtype=float)
+    incoming, outgoing = p - np.roll(p, 1, axis=0), np.roll(p, -1, axis=0) - p
+    cross = incoming[:, 0]*outgoing[:, 1] - incoming[:, 1]*outgoing[:, 0]
+    return np.arctan2(cross, (incoming * outgoing).sum(axis=1))
+
+
+def round_joints(points):
+    """ Cut a round notch around each sharp reflex corner of a counter-clockwise polygon. Vertex 0 stays first. """
+    corners = [p for p, turn in zip(points, turn_angles(points)) if turn < -ROUND_JOINT_MIN_TURN]
+    if not corners:
+        return points
+    notches = shapely.MultiPoint(corners).buffer(ROUND_JOINT_RADIUS, quad_segs=ROUND_JOINT_SEGMENTS)
+    rounded = shapely.Polygon(points).difference(notches)
+    if not isinstance(rounded, shapely.Polygon): # (the notches cut it apart, or it is not a simple polygon)
+        return points
+    ring = rounded.exterior
+    ring = list((ring if ring.is_ccw else ring.reverse()).coords)[:-1]
+    start = min(range(len(ring)), key=lambda i: math.dist(ring[i], points[0]))
+    return ring[start:] + ring[:start]
 
 
 def polygon_center_of_mass(polygon):
@@ -183,13 +213,16 @@ class Skeletonator:
     the polygon formed by all vertices' positions on their tracks at that depth. This works up to the first split event,
     where the offset outline falls apart into several pieces: `self.max_depth`.
 
+    The skeleton is computed for the outline with round notches at its sharp reflex corners (`self.poly`, see
+    round_joints). Its vertices are the vertices of the spiral. `self.outline` is the polygon as given (normalized).
+
     The angle coordinate is fixed for the whole shape: vertex i always sits at angle `self.vertex_angles[i]`, no matter
     the depth, so that consecutive turns of a spiral and the arms of a multi-arm spiral line up at every vertex.
     """
 
     def __init__(self, poly, ref_depth=None):
         self.outline = clean_polygon(poly)
-        self.poly = self.outline
+        self.poly = round_joints(self.outline)
         self.skeleton_nodes, self.skeleton_edges = compute_skeleton(self.poly)
         self.debug_arms = []
         xs, ys = zip(*self.poly)
