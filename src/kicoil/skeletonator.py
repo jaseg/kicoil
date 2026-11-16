@@ -88,7 +88,10 @@ class WasmApp:
                 cache_file.write(lzma.compress(self.module.serialize(), preset=0))
 
     def run(self, stdin='', argv=[]):
-        with NamedTemporaryFile('r') as stdout_f, NamedTemporaryFile('w') as stdin_f:
+        """ Run the module's main function and return (0, stdout). Raises ValueError with the module's stderr output if
+        it exits with an error. """
+        with NamedTemporaryFile('r') as stdout_f, NamedTemporaryFile('w') as stdin_f, \
+                NamedTemporaryFile('r') as stderr_f:
             stdin_f.write(stdin)
             stdin_f.flush()
 
@@ -96,7 +99,7 @@ class WasmApp:
             wasi_cfg.argv = argv
             wasi_cfg.stdin_file = stdin_f.name
             wasi_cfg.stdout_file = stdout_f.name
-            wasi_cfg.inherit_stderr()
+            wasi_cfg.stderr_file = stderr_f.name
 
             linker = wasmtime.Linker(self.engine)
             linker.define_wasi()
@@ -109,7 +112,9 @@ class WasmApp:
                 self.app.exports(store)["_start"](store)
             except wasmtime.ExitTrap as trap:
                 if trap.code != 0:
-                    raise RuntimeError('Error computing straight skeleton.')
+                    raise ValueError(stderr_f.read().strip()) from None
+            finally:
+                sys.stderr.write(stderr_f.read()) # (also when the module aborts)
             return 0, stdout_f.read()
 
 
