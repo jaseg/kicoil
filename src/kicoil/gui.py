@@ -1122,9 +1122,6 @@ class KiCoilGUI:
 
 
 def main(kicad_inst=None):
-    from kipy import KiCad
-    from kipy.errors import ConnectionError
-    kicad_inst = KiCad()
     root = tk.Tk()
     app = KiCoilGUI(root, kicad_inst)
     root.mainloop()
