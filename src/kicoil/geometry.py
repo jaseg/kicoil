@@ -122,7 +122,7 @@ class CircleShape(Shape):
 
     @property
     def slug(self):
-        return 'circle_{self.outer_diameter:.2f}x{self.inner_diameter:.2f}'
+        return f'circle_{self.outer_diameter:.2f}x{self.inner_diameter:.2f}'
 
 
     @property
@@ -172,12 +172,12 @@ class OffsetShape(Shape):
 
     @property
     def slug(self):
-        return 'polygonal_{len(self.polygon)}pt_r{self.radius:.2f}mm'
+        return f'polygonal_{len(self.polygon)}pt_a{self.annular_width:.2f}mm'
 
 
     @property
     def desc(self):
-        return f'polygonal (n={len(self.polygon)} point, r={self.radius:.2f} mm radius)'
+        return f'polygonal (n={len(self.polygon)} point, {self.annular_width:.2f} mm annular width)'
 
 
     def compute_spiral(self, a1, a2, fn=None, debug=False):
