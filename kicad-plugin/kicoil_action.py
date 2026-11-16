@@ -1,7 +1,4 @@
-from pathlib import Path
-
 from kipy import KiCad
-from kipy.errors import ConnectionError
 
 import kicoil.gui
 
