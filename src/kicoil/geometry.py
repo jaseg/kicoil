@@ -34,6 +34,7 @@ mu_0 = 1.25663706127e-06 # from scipy.constants
 
 SPIRAL_CHORD_ERROR = 0.0005 # mm, chord error of the circular spiral center lines used for measurements
 PIECE_STEP = 0.025 # revolutions, length of the center line pieces that the turn spacing is measured on
+VIA_OFFSET_STEPS = 10 # steps of the automatic via offset search
 
 
 def point_line_distance(p, l1, l2):
@@ -162,7 +163,8 @@ def polygon_is_clockwise(coords):
 
 
 class Shape:
-    pass
+    # How far the inner via ring may be moved inwards from the innermost turn
+    max_via_offset = inf
 
 
 @dataclass
@@ -174,6 +176,8 @@ class CircleShape(Shape):
     def __post_init__(self):
         self.outer_radius = self.outer_diameter / 2
         self.inner_radius = self.inner_diameter / 2
+        # The inner via ring must not pass the center (it would end up on the opposite side)
+        self.max_via_offset = self.inner_radius
 
 
     @property
@@ -218,6 +222,7 @@ class OffsetShape(Shape):
         if self.annular_width <= 0:
             raise ValueError('Annular width must be positive')
         self.sk.set_angle_reference(self.annular_width)
+        self.max_via_offset = self.sk.max_depth - self.annular_width
         self.outer_radius = self.sk.radius
         self.inner_radius = self.sk.radius - self.annular_width
 
@@ -503,28 +508,7 @@ class PlanarInductor():
             self.via_drill = max(self.via_diameter / 2, self.via_diameter - 1.2)
             self.logger.warning(f'No via drill given, defaulting to {self.via_drill:.2f} mm based on via diameter.')
 
-        if self.via_offset is None:
-            self.via_offset = max(0, (self.via_diameter - self.trace_width)/2)
-            self.logger.info(f'Autocalculated via offset {self.via_offset:.2f} mm')
-
-        if isclose(self.via_offset, 0, abs_tol=1e-6):
-            self.via_offset = 0
-
-        self.inner_via_ring_radius = self.shape.inner_radius - self.via_offset
-        inner_via_angle = 2*asin((self.via_diameter + self.clearance)/2 / self.inner_via_ring_radius)
-
-        self.outer_via_ring_radius = self.shape.outer_radius + self.via_offset
-        outer_via_angle = 2*asin((self.via_diameter + self.clearance)/2 / self.outer_via_ring_radius)
-
-        self.logger.info(f'Inner via ring @r={self.inner_via_ring_radius:.2f} mm (from {self.shape.inner_radius:.2f} mm)')
-        self.logger.info(f'    {degrees(inner_via_angle):.1f} deg / via')
-        self.logger.info(f'Outer via ring @r={self.outer_via_ring_radius:.2f} mm (from {self.shape.outer_radius:.2f} mm)')
-        self.logger.info(f'    {degrees(outer_via_angle):.1f} deg / via')
-
-        # Check if the vias of the inner ring are so large that they would overlap
-        if inner_via_angle*self.twists > (4*pi if self.stagger_inner_vias else 2*pi):
-            min_dia = 2*((self.via_diameter + self.clearance) / (2*sin(pi / self.twists * (2 if self.stagger_inner_vias else 1))) + self.via_offset)
-            warnings.warn(f'Overlapping vias in inner via ring. Calculated minimum inner diameter is {min_dia:.2f} mm.')
+        self._place_vias()
 
         t, _, b = self.layer_pair.partition(',')
         self.layer_pair = (t.strip(), b.strip())
@@ -551,6 +535,48 @@ class PlanarInductor():
         self.R = self.track_length/1e3 * rho / A
         self.logger.info(f'Approximate resistance: {self.R:g} Ω')
 
+    def _place_vias(self):
+        """ Choose the via offset (if not given) and check that the vias do not overlap """
+        # The inner via ring must not go past the center of a circle or the collapse depth of a polygon outline. A
+        # staggered inner ring reaches three times the via offset inwards.
+        max_offset = self.shape.max_via_offset / (3 if self.stagger_inner_vias else 1)
+        need = self.via_diameter + self.clearance
+        if self.via_offset is None:
+            # Vias wider than the trace can come too close to a neighboring turn that runs at an angle: move them
+            # inwards. Where the inner contour narrows, that can put several of them on top of each other: pull them
+            # back until they clear.
+            self.via_offset = min(max(0, (self.via_diameter - self.trace_width)/2), max_offset)
+            for _ in range(VIA_OFFSET_STEPS):
+                offset, gap = self.via_offset, self.via_track_clearance()[0]
+                if gap >= self.clearance:
+                    break
+                self.via_offset = min(max_offset, offset + self.clearance - gap + 1e-4)
+                if self.via_track_clearance()[0] <= gap:
+                    self.via_offset = offset
+                    break
+            for offset in np.linspace(self.via_offset, 0, VIA_OFFSET_STEPS).tolist():
+                self.via_offset = offset
+                if self.via_ring_spacing()[0] >= need:
+                    break
+            self.logger.info(f'Autocalculated via offset {self.via_offset:.2f} mm')
+        if isclose(self.via_offset, 0, abs_tol=1e-6):
+            self.via_offset = 0
+
+        self.inner_via_ring_radius = self.shape.inner_radius - self.via_offset
+        self.outer_via_ring_radius = self.shape.outer_radius + self.via_offset
+        self.logger.info(f'Inner via ring @r={self.inner_via_ring_radius:.2f} mm (from {self.shape.inner_radius:.2f} mm)')
+        self.logger.info(f'Outer via ring @r={self.outer_via_ring_radius:.2f} mm (from {self.shape.outer_radius:.2f} mm)')
+
+        closest, pair = self.via_ring_spacing()
+        if closest < need:
+            (x1, y1), (x2, y2) = pair
+            message = (f'Overlapping vias: the vias at ({x1:.3f}, {y1:.3f}) and ({x2:.3f}, {y2:.3f}) are {closest:.3f} mm '
+                       f'apart, but need {need:.3f} mm (via diameter plus clearance). Reduce the annular width, the via '
+                       f'diameter, the via offset or the number of twists.')
+            if closest < self.via_diameter:
+                raise ValueError(message)
+            warnings.warn(message)
+
     def arm_angles(self, i):
         """ Start, fold and end angle of the i'th arm pair. The arm on the first layer runs inwards from the start to the
         fold angle, the arm on the second layer runs outwards from the fold to the end angle. """
@@ -571,6 +597,48 @@ class PlanarInductor():
         results = [min_turn_spacing(pieces, self.spiral_pitch * (1 + 1e-9)) for pieces in self._pieces]
         best, where = min(results, key=lambda r: r[0])
         return (self.spiral_pitch, None) if where is None else (min(best, self.spiral_pitch), where)
+
+    def via_positions(self):
+        """ Positions of the inner and outer via rings for the current via offset. The outer ring has no via at the
+        start of the first arm, where the pads are. """
+        inner, outer = [], []
+        for i in range(self.twists):
+            start_angle, fold_angle, _end_angle = self.arm_angles(i)
+            stagger = 2*self.via_offset if i%2 != 0 else 0
+            r = self.shape.inner_radius - self.via_offset - (stagger if self.stagger_inner_vias else 0)
+            inner.append(self.shape.project_point(r, fold_angle))
+            r = self.shape.outer_radius + self.via_offset + (stagger if self.stagger_outer_vias else 0)
+            outer.append(self.shape.project_point(r, start_angle))
+        return inner, outer[1:]
+
+    def via_ring_spacing(self):
+        """ Smallest center distance between any two vias for the current via offset, and the two via positions """
+        inner, outer = self.via_positions()
+        return min(((dist(p, q), (p, q)) for p, q in itertools.combinations(inner + outer, 2)),
+                   default=(inf, None), key=lambda e: e[0])
+
+    def via_track_clearance(self):
+        """ Smallest edge-to-edge distance between a via and a spiral arm, other than the half revolution of an arm that
+        leads into the via, for the current via offset. Returns (gap, via position). """
+        inner, outer = self.via_positions()
+        vias = [] # (position, [(layer, arm, angle in revolutions where the arm connects to the via), ...])
+        for i in range(self.twists):
+            start_angle, fold_angle, _end_angle = self.arm_angles(i)
+            vias.append((inner[i], [(0, i, fold_angle/(2*pi)), (1, i, fold_angle/(2*pi))]))
+            if i > 0:
+                j = (i - self.turns) % self.twists
+                vias.append((outer[i-1], [(0, i, start_angle/(2*pi)), (1, j, self.arm_angles(j)[2]/(2*pi))]))
+        best, where = inf, None
+        for v, connections in vias:
+            for layer, (geoms, arm, lo, hi) in enumerate(self._pieces):
+                # Leave out the half revolution of each arm that leads into the via
+                leads_in = np.zeros(len(geoms), dtype=bool)
+                for conn_layer, conn_arm, t in connections:
+                    if conn_layer == layer:
+                        leads_in |= (arm == conn_arm) & (lo > t - 0.5) & (hi < t + 0.5)
+                if not leads_in.all() and (d := shapely.distance(shapely.Point(v), geoms[~leads_in]).min()) < best:
+                    best, where = float(d), v
+        return best - self.via_diameter/2 - self.trace_width/2, where
 
     @property
     def default_footprint_name(self):
@@ -602,28 +670,20 @@ class PlanarInductor():
             if dist(p1, p2) > 1e-9:
                 footprint.lines.append(kicad.make_line(*p1, *p2, self.trace_width, layer))
 
-        total_angle = self.twists*2*self.sweeping_angle*self.layers
-
-        inverse = {}
-        for i in range(self.twists):
-            inverse[i*self.turns%self.twists] = i
-
         arms_layers = [[], []]
+        inner_vias, outer_vias = self.via_positions()
         debug = geometry_debug_file is not None
-        # Array where we collect all gerbonara kicad line and arc objects
         for i in range(self.twists):
-            start_angle = i*self.sector_angle
-            fold_angle = start_angle + self.sweeping_angle
-            end_angle = fold_angle + self.sweeping_angle
+            start_angle, fold_angle, end_angle = self.arm_angles(i)
 
             # Handle the spiral arm
-            points_layer0, _ = self.shape.compute_spiral(a1=start_angle, a2=fold_angle, fn=circle_segments, debug=debug)
+            points_layer0, _ = self.shape.compute_spiral(start_angle, fold_angle, fn=circle_segments, debug=debug)
             xn, yn = points_layer0[-1]
             add_track(points_layer0, self.layer_pair[0])
 
             if self.layers > 1:
                 # Handle the returning arm on the bottom layer
-                points_layer1, _ = self.shape.compute_spiral(a1=end_angle, a2=fold_angle, fn=circle_segments, debug=debug)
+                points_layer1, _ = self.shape.compute_spiral(end_angle, fold_angle, fn=circle_segments, debug=debug)
                 points_layer1 = points_layer1[::-1]
                 add_track(points_layer1, self.layer_pair[1])
 
@@ -632,45 +692,26 @@ class PlanarInductor():
                 xq, yq = self.shape.project_point(self.shape.outer_radius, fold_angle)
                 points_layer1 = [(xn, yn), (xq, yq)]
                 add_line((xn, yn), (xq, yq), self.layer_pair[1])
-            
+
             arms_layers[0].append(points_layer0)
             arms_layers[1].append(points_layer1)
 
         for i in range(self.twists):
-            start_angle = i*self.sector_angle
-            fold_angle = start_angle + self.sweeping_angle
-            end_angle = fold_angle + self.sweeping_angle
-            
-            # Handle inner via ring and process staggering if enabled
-            r = self.inner_via_ring_radius
-            if self.stagger_inner_vias:
-                if i%2 != 0:
-                    r -= 2*self.via_offset
-
+            # Inner via ring
             points_layer0 = arms_layers[0][i]
             points_layer1 = arms_layers[1][i]
-
-            xv, yv = self.shape.project_point(r, fold_angle)
-
+            xv, yv = inner_vias[i]
             add_line(points_layer0[-1], (xv, yv), self.layer_pair[0])
             add_line((xv, yv), points_layer1[0], self.layer_pair[1])
-
             footprint.pads.append(kicad.make_via(xv, yv,
                                                  self.via_diameter, self.via_drill, self.clearance,
                                                  self.layer_pair))
 
-            # Handle outer via ring and process staggering if enabled unless we are at the start of the coil, where we will
-            # place pads below.
-            r = self.outer_via_ring_radius
-
-            if self.stagger_outer_vias:
-                if i%2 != 0:
-                    r += 2*self.via_offset
-
+            # Outer via ring. At the start of the coil we place the pads instead.
             points_layer0 = arms_layers[0][i]
             points_layer1 = arms_layers[1][(i - self.turns) % self.twists]
             if i > 0:
-                xv, yv = self.shape.project_point(r, start_angle)
+                xv, yv = outer_vias[i-1]
                 add_line(points_layer0[0], (xv, yv), self.layer_pair[0])
                 add_line(points_layer1[-1], (xv, yv), self.layer_pair[1])
                 footprint.pads.append(kicad.make_via(xv, yv,
