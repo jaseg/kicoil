@@ -590,6 +590,18 @@ class PlanarInductor():
                 clearance=self.clearance,
                 zone_connect=0)
 
+        def add_track(points, layer):
+            if self.approximate_arcs and isinstance(self.shape, CircleShape) and len(points) >= 3:
+                footprint.arcs.extend(arc_approximate(points, self.trace_width, layer, arc_tolerance))
+            else:
+                footprint.lines.extend(kicad.make_line(*p1, *p2, self.trace_width, layer)
+                                       for p1, p2 in zip(points, points[1:]) if p1 != p2)
+
+        def add_line(p1, p2, layer):
+            # Skip zero-length connections, e.g. when the via offset is zero
+            if dist(p1, p2) > 1e-9:
+                footprint.lines.append(kicad.make_line(*p1, *p2, self.trace_width, layer))
+
         total_angle = self.twists*2*self.sweeping_angle*self.layers
 
         inverse = {}
@@ -607,26 +619,19 @@ class PlanarInductor():
             # Handle the spiral arm
             points_layer0, _ = self.shape.compute_spiral(a1=start_angle, a2=fold_angle, fn=circle_segments, debug=debug)
             xn, yn = points_layer0[-1]
-
-            if self.approximate_arcs and isinstance(self.shape, CircleShape):
-                footprint.arcs.extend(arc_approximate(points_layer0, self.trace_width, self.layer_pair[0], arc_tolerance))
-            else:
-                footprint.lines.extend(kicad.make_line(*p1, *p2, self.trace_width, self.layer_pair[0]) for p1, p2 in zip(points_layer0, points_layer0[1:]))
+            add_track(points_layer0, self.layer_pair[0])
 
             if self.layers > 1:
                 # Handle the returning arm on the bottom layer
                 points_layer1, _ = self.shape.compute_spiral(a1=end_angle, a2=fold_angle, fn=circle_segments, debug=debug)
                 points_layer1 = points_layer1[::-1]
-                if self.approximate_arcs and isinstance(self.shape, CircleShape):
-                    footprint.arcs.extend(arc_approximate(points_layer1, self.trace_width, self.layer_pair[1], arc_tolerance))
-                else:
-                    footprint.lines.extend(kicad.make_line(*p1, *p2, self.trace_width, self.layer_pair[1]) for p1, p2 in zip(points_layer1, points_layer1[1:]))
+                add_track(points_layer1, self.layer_pair[1])
 
             else:
                 # Add a straight connecting segment connecting the inner point to the outside of the spiral.
                 xq, yq = self.shape.project_point(self.shape.outer_radius, fold_angle)
                 points_layer1 = [(xn, yn), (xq, yq)]
-                footprint.lines.append(kicad.make_line(xn, yn, xq, yq, self.trace_width, self.layer_pair[1]))
+                add_line((xn, yn), (xq, yq), self.layer_pair[1])
             
             arms_layers[0].append(points_layer0)
             arms_layers[1].append(points_layer1)
@@ -647,8 +652,8 @@ class PlanarInductor():
 
             xv, yv = self.shape.project_point(r, fold_angle)
 
-            footprint.lines.append(kicad.make_line(*points_layer0[-1], xv, yv, self.trace_width, self.layer_pair[0]))
-            footprint.lines.append(kicad.make_line(xv, yv, *points_layer1[0], self.trace_width, self.layer_pair[1]))
+            add_line(points_layer0[-1], (xv, yv), self.layer_pair[0])
+            add_line((xv, yv), points_layer1[0], self.layer_pair[1])
 
             footprint.pads.append(kicad.make_via(xv, yv,
                                                  self.via_diameter, self.via_drill, self.clearance,
@@ -664,23 +669,20 @@ class PlanarInductor():
 
             points_layer0 = arms_layers[0][i]
             points_layer1 = arms_layers[1][(i - self.turns) % self.twists]
-            
-            xv, yv = self.shape.project_point(r, start_angle)
-
-            footprint.lines.append(kicad.make_line(*points_layer0[0], xv, yv, self.trace_width, self.layer_pair[0]))
-            footprint.lines.append(kicad.make_line(*points_layer1[-1], xv, yv, self.trace_width, self.layer_pair[1]))
-
             if i > 0:
+                xv, yv = self.shape.project_point(r, start_angle)
+                add_line(points_layer0[0], (xv, yv), self.layer_pair[0])
+                add_line(points_layer1[-1], (xv, yv), self.layer_pair[1])
                 footprint.pads.append(kicad.make_via(xv, yv,
                                                      self.via_diameter, self.via_drill, self.clearance,
                                                      self.layer_pair))
-            
+
             else:
-                # Place the pads on the outer radius
-                px, py = self.shape.project_point(self.shape.outer_radius, 0)
-                footprint.pads.extend([
-                        kicad.make_pad(1, [self.layer_pair[0]], px, py, self.trace_width, self.clearance),
-                        kicad.make_pad(2, [self.layer_pair[1]], px, py, self.trace_width, self.clearance)])
+                # Place the pads at the ends of the spiral arms on the outer radius
+                px, py = points_layer0[0]
+                footprint.pads.append(kicad.make_pad(1, [self.layer_pair[0]], px, py, self.trace_width, self.clearance))
+                qx, qy = points_layer1[-1]
+                footprint.pads.append(kicad.make_pad(2, [self.layer_pair[1]], qx, qy, self.trace_width, self.clearance))
 
         if self.keepout_zone:
             pts = self.shape.offset_exterior(self.keepout_margin)
