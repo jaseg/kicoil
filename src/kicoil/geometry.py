@@ -36,6 +36,7 @@ DEFAULT_CIRCLE_SEGMENTS = 360 # points per revolution of circular coils in the f
 SPIRAL_CHORD_ERROR = 0.0005 # mm, chord error of the circular spiral center lines used for measurements
 PIECE_STEP = 0.025 # revolutions, length of the center line pieces that the turn spacing is measured on
 VIA_OFFSET_STEPS = 10 # steps of the automatic via offset search
+KEEPOUT_MITER_LIMIT = 2.0 # keepout corners are cut off at this multiple of the margin from the outline's corner
 
 
 def point_line_distance(p, l1, l2):
@@ -248,6 +249,12 @@ class OffsetShape(Shape):
 
 
     def offset_exterior(self, margin):
+        """ Outline offset outwards by margin (inwards for a negative margin), e.g. for the keepout zone. """
+        if margin > 0:
+            offset = shapely.Polygon(self.polygon).buffer(margin, join_style='mitre', mitre_limit=KEEPOUT_MITER_LIMIT)
+            return list(shapely.geometry.polygon.orient(offset).exterior.coords)[:-1]
+        if margin == 0:
+            return list(self.polygon)
         return self.sk.spiral(0, 1, -margin, -margin)[0][:-1]
 
 
