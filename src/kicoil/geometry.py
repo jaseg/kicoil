@@ -540,10 +540,10 @@ class PlanarInductor():
         self.logger.info(f'Fill factor: {phi:g}')
         self.logger.info(f'Approximate inductance: {self.L:g} µH')
 
-        points, _angles = self.shape.compute_spiral(a1=0, a2=self.sector_angle)
-        arm_length = sum(dist(p, q) for p, q in zip(points, points[1:]))
-
-        self.track_length = arm_length*self.twists*self.layers
+        # One arm runs from the outside to the inside of a layer
+        start_angle, fold_angle, _end_angle = self.arm_angles(0)
+        points, _angles = self.shape.compute_spiral(start_angle, fold_angle)
+        self.track_length = sum(dist(p, q) for p, q in itertools.pairwise(points))*self.twists*self.layers
         self.logger.info(f'Approximate track length: {self.track_length:.2f} mm')
 
         A = self.copper_thickness/1e3 * self.trace_width/1e3 # trace cross-section area
