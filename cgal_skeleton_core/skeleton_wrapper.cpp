@@ -111,7 +111,7 @@ int main()
         double y2 = CGAL::to_double(v_target->point().y());
 
         // Output: start_x start_y end_x end_y start_time end_time
-        std::cout << std::setprecision(12) << x1 << " " << y1 << " "
+        std::cout << std::setprecision(17) << x1 << " " << y1 << " "
                   << x2 << " " << y2 << " "
                   << t1 << " " << t2 << std::endl;
     }
