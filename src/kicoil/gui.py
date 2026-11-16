@@ -30,6 +30,9 @@ from io import BytesIO
 from .geometry import divisors, CircleShape, SectorShape, StarShape, SVGShape, RectangleShape, RegularPolygonShape, TrapezoidShape, DEFAULT_CIRCLE_SEGMENTS
 from .svg import make_transparent_svg
 from .worker import build_model
+from .kicad import update_footprint_instance
+
+from kipy.board_types import FootprintInstance, BoardLayer
 
 try:
     # for rendering gerbonara's svg output to PNG
@@ -39,6 +42,8 @@ try:
     HAS_PREVIEW = True
 except ImportError:
     HAS_PREVIEW = False
+
+NEW_FOOTPRINT_REFERENCE = 'L?'
 
 
 class TextWidgetHandler(logging.Handler):
@@ -225,9 +230,9 @@ class KiCoilGUI:
         self.cancel_button.pack(side=tk.LEFT, padx=5)
         self.status_var = tk.StringVar()
         ttk.Label(button_frame, textvariable=self.status_var, foreground='gray').pack(side=tk.LEFT, padx=5)
-        #if self.kicad_inst: FIXME
-        #    ttk.Button(button_frame, text="Update Footprint on Board", 
-        #              command=self.update_board_footprint, width=20).pack(side=tk.LEFT, padx=5)
+        if self.kicad_inst:
+            ttk.Button(button_frame, text="Place on Board",
+                      command=self.update_board_footprint, width=20).pack(side=tk.LEFT, padx=5)
         
         status_label = ttk.Label(main_frame, text="Output:", font=('Helvetica', 10, 'bold'))
         status_label.grid(row=3, column=0, sticky=tk.W, pady=(10, 0))
@@ -1001,84 +1006,37 @@ class KiCoilGUI:
         self.output_text['state'] = 'disabled'
     
     def update_board_footprint(self):
+        """ Replace the footprint selected in KiCad's PCB editor with the coil, or place a new one if none is
+        selected. """
         if self.current_model is None:
             messagebox.showerror("Error", "No layout. Please wait for it or check the output for warnings or errors.")
             return
 
-        from kipy.board_types import FootprintInstance, Footprint, Pad, BoardArc, BoardSegment, FootprintAttributes,\
-                PadStack, PadStackLayer, PadStackType, PadStackShape, DrillProperties, PadType
-        from kipy.geometry import Vector2
-        from kipy.common_types import GraphicAttributes, StrokeAttributes
-        from kipy.util import from_mm
-        from kipy.util.board_layer import CANONICAL_LAYER_NAMES
-
-        from gerbonara.cad.kicad.footprints import Atom
-
         board = self.kicad_inst.get_board()
         selected = [item for item in board.get_selection() if isinstance(item, FootprintInstance)]
-
-        if not selected:
-            messagebox.showerror("Error", "No footprint selected. Select one footprint to replace in KiCad's PCB editor.")
-            return
-        elif len(selected) > 1:
+        if len(selected) > 1:
             messagebox.showerror("Error", "More than one footprint selected. Select only the footprint you want to replace.")
             return
 
-        selected_footprint, = selected
-
         footprint_name = self.footprint_name_entry.get() or None
+        footprint = self.current_model.render_footprint(footprint_name, self.get_circle_segments())
 
-        self.output_text['state'] = 'normal'
-        self.output_text.insert(tk.END, "Rendering footprint...\n", 'info')
-        self.output_text.see(tk.END)
-
-        model = self.current_model.render_footprint(footprint_name, self.get_circle_segments())
-        selected_footprint.attributes.exclude_from_bill_of_materials = True
-        layer_map = {v: k for k, v in CANONICAL_LAYER_NAMES.items()}
-        items = []
-
-        for line in model.lines:
-            seg = BoardSegment()
-            seg.start = Vector2.from_xy(from_mm(line.start.x), from_mm(line.start.y))
-            seg.end = Vector2.from_xy(from_mm(line.end.x), from_mm(line.end.y))
-            seg.attributes.stroke.width = from_mm(line.stroke.width)
-            seg.layer = layer_map[line.layer]
-            selected_footprint.definition.add_item(seg)
-            items.append(seg)
-
-        for ref in model.arcs:
-            arc = BoardArc()
-            arc.start = Vector2.from_xy(from_mm(ref.start.x), from_mm(ref.start.y))
-            arc.mid = Vector2.from_xy(from_mm(ref.mid.x), from_mm(ref.mid.y))
-            arc.end = Vector2.from_xy(from_mm(ref.end.x), from_mm(ref.end.y))
-            arc.attributes.stroke.width = from_mm(ref.stroke.width)
-            arc.layer = layer_map[ref.layer]
-            selected_footprint.definition.add_item(arc)
-            items.append(arc)
-
-        for ref in model.pads:
-            pad = Pad() 
-            pad.number = ref.number
-            pad.position = Vector2.from_xy(from_mm(ref.at.x), from_mm(ref.at.y))
-            pad.type = PadType.PT_SMD if ref.type == Atom.smd else PadType.PT_PTH
-            pad.padstack.type = PadStackType.PST_NORMAL
-            pad.padstack.layers = [layer_map[name] for name in ref.layers]
-            layer = pad.padstack.copper_layers[0]
-            layer.shape = PadStackShape.PSS_CIRCLE
-            layer.size = Vector2.from_xy(from_mm(ref.size.x), from_mm(ref.size.y))
-            layer.layer = layer_map[ref.layers[0]] # ? duplicate
-            if ref.drill:
-                pad.padstack.drill.diameter = Vector2.from_xy(from_mm(ref.drill.diameter), from_mm(ref.drill.diameter))
-            selected_footprint.definition.add_item(pad)
-            items.append(pad)
-
-        commit = board.begin_commit()
-        board.create_items(items)
-        board.update_items([selected_footprint])
-        board.push_commit(commit, 'Updated planar coil footprint')
-        self.output_text.insert(tk.END, "Done.", 'info')
-        self.output_text['state'] = 'disabled'
-        self.output_text.see(tk.END)
+        if selected:
+            instance, = selected
+            update_footprint_instance(instance, footprint)
+            board.update_items(instance)
+            self.kicoil_logger.info('Updated the selected footprint on the board.')
+        else:
+            instance = FootprintInstance()
+            instance.layer = BoardLayer.BL_F_Cu
+            instance.reference_field.text.value = NEW_FOOTPRINT_REFERENCE
+            update_footprint_instance(instance, footprint)
+            instance, = board.create_items(instance)
+            board.clear_selection()
+            board.add_to_selection(instance)
+            # Board.interactive_move leaves an API commit open (KiCad 10.99), so start KiCad's own move tool.
+            self.kicad_inst.run_action('pcbnew.InteractiveMove.move')
+            self.kicoil_logger.info('Created a new footprint. Click in the PCB editor to place it.')
 
     def save_footprint_file(self):
         if self.current_model is None:
@@ -1122,9 +1080,6 @@ class KiCoilGUI:
 
 
 def main(kicad_inst=None):
-    from kipy import KiCad
-    from kipy.errors import ConnectionError
-    kicad_inst = KiCad()
     root = tk.Tk()
     app = KiCoilGUI(root, kicad_inst)
     root.mainloop()

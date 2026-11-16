@@ -49,14 +49,14 @@ def do_release(dry_run):
     ver_dict = {
         'version': version,
         'status': 'stable',
-        'kicad_version': '9.00',
+        'kicad_version': '10.0',
     }
 
     meta_file = json.loads(meta_path.read_text())
     meta_file['versions'] = [ver_dict]
     (pkg_dir / 'metadata.json').write_text(json.dumps(meta_file, indent=4))
 
-    res = subprocess.run(['uv', 'export', '--no-hashes', '--no-emit-project', '--format', 'requirements.txt', '--group', 'gui'],
+    res = subprocess.run(['uv', 'export', '--no-hashes', '--no-emit-project', '--format', 'requirements.txt', '--no-dev', '--group', 'gui'],
                    check=True, capture_output=True, text=True)
     (plugin_dir / 'requirements.txt').write_text(res.stdout)
 
