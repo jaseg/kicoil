@@ -87,21 +87,6 @@ def round_joints(points):
     return ring[start:] + ring[:start]
 
 
-def polygon_center_of_mass(polygon):
-    # https://en.wikipedia.org/wiki/Centroid
-    total_x, total_y = 0, 0
-    area = 0
-    for (x1, y1), (x2, y2) in edge_cycle(polygon):
-        diff = (x1*y2 - x2*y1)
-        total_x += (x1 + x2) * diff
-        total_y += (y1 + y2) * diff
-        area += diff
-    area /= 2
-    total_x /= 6*area
-    total_y /= 6*area
-    return total_x, total_y
-
-
 class WasmApp:
     def __init__(self, wasm_filename, cachedir="kicoil"):
         module_binary = importlib.resources.read_binary(__package__, wasm_filename)

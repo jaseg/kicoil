@@ -155,15 +155,6 @@ def min_turn_spacing(pieces, search_radius, min_turn_separation=0.5):
     return float(d[k]), (x, y)
 
 
-def polygon_is_clockwise(coords):
-    # https://en.wikipedia.org/wiki/Curve_orientation
-    xb, yb, i = min([(x, y, i) for i, (x, y) in enumerate(coords)])
-    xa, ya = coords[(i-1) % len(coords)]
-    xc, yc = coords[(i+1) % len(coords)]
-    det = (xa*yb + xb*yc + xc*ya) - (xa*yc + xb * ya + xc * yb)
-    return det < 0
-
-
 class Shape:
     # How far the inner via ring may be moved inwards from the innermost turn
     max_via_offset = inf
@@ -383,39 +374,26 @@ class RegularPolygonShape(OffsetShape):
 
 @dataclass
 class SVGShape(OffsetShape):
+    """ Outline from an SVG file, see svg_import.read_outline. """
     filename: str
     annular_width: float
-    arc_tolerance: float = 0.05 # mm
+    arc_tolerance: float = 0.01 # mm
     polygon: list = field(init=False)
 
     def __post_init__(self):
-        # center on y axis
-        from bs4 import BeautifulSoup
-        with open(self.filename) as f:
-            soup = BeautifulSoup(f.read(), features='xml')
-            path = soup.find('path', recursive=True)
-            d = path.attrs['d']
-            d = d.strip('MmZ ').replace(',', 'L')
-            coord_pairs = d.split('L')
-            coords = [tuple(map(float, pair.split())) for pair in coord_pairs]
-            
-        if polygon_is_clockwise(coords):
-            coords = coords[::-1]
-            
-        # Calculate bounding box
-        min_x = min(x for x, _y in coords)
-        min_y = max(x for x, _y in coords)
-        max_x = min(y for _x, y in coords)
-        max_y = max(y for _x, y in coords)
+        from . import svg_import
+        coords = svg_import.read_outline(self.filename, self.arc_tolerance)
+
+        min_x, min_y, max_x, max_y = shapely.Polygon(coords).bounds
         if max_x < 0 or max_y < 0 or min_x > 0 or min_y > 0:
             # (0, 0) is not within the polygon's axis-aligned bounding box, recenter.
-            ox, oy = skeletonator.polygon_center_of_mass(coords)
+            (ox, oy), = shapely.Polygon(coords).centroid.coords
             warnings.warn(f'Polygon looks not centered, bounds are ({min_x:.2f}, {min_y:.2f}), ({max_x:.2f}, {max_y:.2f}). Aligning (0, 0) with polygon centroid at ({ox:.2f}, {oy:.2f})')
             coords = [(x-ox, y-oy) for x, y in coords]
-        
+
         self.polygon  = coords
         super().__post_init__()
-    
+
     @property
     def slug(self):
         return f'svg_{len(self.polygon)}n'
