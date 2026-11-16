@@ -84,6 +84,7 @@ def circle_center_to_tangents(center, a, b):
 @click.option('--copper-thickness', type=float, default=0.035, help='Copper thickness for resistance calculation, in mm. Default: 0.035mm ^= 1 Oz')
 @click.option('--circle-segments', type=int, default=DEFAULT_CIRCLE_SEGMENTS, help=f'Number of points per 360 degrees for circular coils. Arcs are fitted to the same accuracy. Default: {DEFAULT_CIRCLE_SEGMENTS}')
 @click.option('--approximate-arcs/--no-approximate-arcs', default=True, help='Use circular arcs to smoothen output shape (default: on)')
+@click.option('--arm-phase', type=float, default=0, help='Rotate the start points of the spiral arms along the outline by this angle [deg] (default: 0)')
 @click.option('--format', type=click.Choice(['svg', 'gerber', 'kicad-footprint', 'kicad-pcb', 'json', 'gdsii', 'oasis', 'show']), default='kicad-footprint')
 @click.option('--clipboard/--no-clipboard', help='Use clipboard integration (requires wl-clipboard)')
 @click.option('--footprint-name', help="Name for the generated footprint. Default: Output file name sans extension.")
