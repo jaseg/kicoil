@@ -1,4 +1,3 @@
-
 # Copyright 2025 Jan Sebastian Götte <code@jaseg.de>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -262,11 +261,11 @@ class TrapezoidShape(OffsetShape):
         w, h, d = self.width, self.height, self.offset
         self.polygon = [(w/2-d, -h/2), (w/2, h/2), (-w/2, h/2), (-w/2+d, -h/2)]
         super().__post_init__()
-    
+
     @property
     def slug(self):
         return f'trapezoid_{self.width:.2f}-2*{self.offset:.2f}x{self.height:.2f}'
-    
+
     @property
     def desc(self):
         return f'{self.width:.2f} x {self.height:.2f} mm, {self.offset:.2f} mm offset isosceles trapezoidal'
@@ -284,11 +283,11 @@ class RectangleShape(OffsetShape):
         w, h = self.width, self.height
         self.polygon = [(w/2, -h/2), (w/2, h/2), (-w/2, h/2), (-w/2, -h/2)]
         super().__post_init__()
-    
+
     @property
     def slug(self):
         return f'rectangle_{self.width:.2f}x{self.height:.2f}'
-    
+
     @property
     def desc(self):
         return f'{self.width:.2f} x {self.height:.2f} mm rectangle'
@@ -312,11 +311,11 @@ class SectorShape(OffsetShape):
         self.polygon  = [pt(r2, self.angle/2 - i/n2 * self.angle) for i in range(n2+1)]
         self.polygon += [pt(r1, i/n1 * self.angle - self.angle/2) for i in range(n1+1)]
         super().__post_init__()
-    
+
     @property
     def slug(self):
         return f'sector_{self.outer_diameter:.2f}x{self.inner_diameter:.2f}_{degrees(self.angle):.0f}deg'
-    
+
     @property
     def desc(self):
         return f'{self.outer_diameter:.2f} x {self.inner_diameter:.2f} mm {degrees(self.angle):.0f} deg sector'
@@ -337,11 +336,11 @@ class StarShape(OffsetShape):
         circle = lambda r, n, phase: [pt(r, (i + phase)*2*pi/n) for i in range(n)]
         self.polygon  = [x for pair in zip(circle(self.outer_diameter/2, self.points, 0), circle(self.inner_diameter/2, self.points, 0.5)) for x in pair]
         super().__post_init__()
-    
+
     @property
     def slug(self):
         return f'star_{self.outer_diameter:.2f}x{self.inner_diameter:.2f}'
-    
+
     @property
     def desc(self):
         purpose = ', for demonic purposes' if self.points == 5 else ''
@@ -362,11 +361,11 @@ class RegularPolygonShape(OffsetShape):
         circle = lambda r, n, phase: [pt(r, (i + phase)*2*pi/n) for i in range(n)]
         self.polygon  = list(circle(self.diameter/2, self.corners, 0))
         super().__post_init__()
-    
+
     @property
     def slug(self):
         return f'regular_{self.corners}gon_{self.diameter:.2f}'
-    
+
     @property
     def desc(self):
         return f'{self.diameter:.2f} mm diameter {self.corners} corner regular polygon'
@@ -397,10 +396,11 @@ class SVGShape(OffsetShape):
     @property
     def slug(self):
         return f'svg_{len(self.polygon)}n'
-    
+
     @property
     def desc(self):
         return f'{len(self.polygon)} node imported SVG shape'
+
 
 @dataclass
 class PlanarInductor():
@@ -726,4 +726,3 @@ class PlanarInductor():
         if geometry_debug_file:
             self.shape.sk.dump_to_pdf(geometry_debug_file)
         return footprint
-
