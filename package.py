@@ -56,7 +56,7 @@ def do_release(dry_run):
     meta_file['versions'] = [ver_dict]
     (pkg_dir / 'metadata.json').write_text(json.dumps(meta_file, indent=4))
 
-    res = subprocess.run(['uv', 'export', '--no-hashes', '--no-emit-project', '--format', 'requirements.txt', '--group', 'gui'],
+    res = subprocess.run(['uv', 'export', '--no-hashes', '--no-emit-project', '--format', 'requirements.txt', '--no-dev', '--group', 'gui'],
                    check=True, capture_output=True, text=True)
     (plugin_dir / 'requirements.txt').write_text(res.stdout)
 
