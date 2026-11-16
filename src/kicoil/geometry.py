@@ -263,7 +263,7 @@ class SectorShape(OffsetShape):
         n2 = ceil(pi / acos(1 - self.arc_tolerance/self.outer_diameter) * self.angle / (2*pi))
         # center on y axis
         pt = lambda r, a: (r*sin(a), r*cos(a))
-        self.polygon  = [pt(r2, self.angle/2 - i/n1 * self.angle) for i in range(n1+1)]
+        self.polygon  = [pt(r2, self.angle/2 - i/n2 * self.angle) for i in range(n2+1)]
         self.polygon += [pt(r1, i/n1 * self.angle - self.angle/2) for i in range(n1+1)]
         super().__post_init__()
     
