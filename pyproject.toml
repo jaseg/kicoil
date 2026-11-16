@@ -55,6 +55,7 @@ dev = [
 ]
 gui = ["cairosvg", "pillow"]
 gds = ["gdstk"]
+test = ["pytest", "networkx"]
 
 [build-system]
 requires = ["uv-build"]
