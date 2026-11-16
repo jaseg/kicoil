@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 import sys
 from math import *
 
+import numpy as np
+
 from gerbonara.cad.kicad.footprints import Footprint
 from gerbonara.cad.kicad.primitives import Zone, Hatch, ZoneKeepout, ZonePolygon, XYCoord
 
@@ -131,26 +133,16 @@ class CircleShape(Shape):
 
 
     def compute_spiral(self, a1, a2, fn=64, debug=False):
+        """ Points of the spiral from angle a1 on the outer radius to angle a2 on the inner radius, with fn points per
+        revolution, and the angle of each point in revolutions. """
         r1, r2 = self.outer_radius, self.inner_radius
-        fn = ceil(fn * abs(a2-a1)/(2*pi))
-        x0, y0 = cos(a1)*r1, sin(a1)*r1
-        dr = 3 if r2 < r1 else -3
-
-        xn, yn = x0, y0
-        points = [(x0, y0)]
-        dists = []
-        for i in range(fn):
-            xp, yp = xn, yn
-            r = r1 + (i+1)*(r2-r1)/fn
-            a = a1 + (i+1)*(a2-a1)/fn
-            xn, yn = cos(a)*r, sin(a)*r
-            points.append((xn, yn))
-            dists.append(dist((xp, yp), (xn, yn)))
-
-        return points, sum(dists), [None]*len(points)
+        fn = max(1, ceil(fn * abs(a2-a1)/(2*pi)))
+        a = a1 + (a2 - a1) * np.arange(fn + 1) / fn
+        r = r1 + (r2 - r1) * np.arange(fn + 1) / fn
+        return list(zip((np.cos(a) * r).tolist(), (np.sin(a) * r).tolist())), (a / (2*pi)).tolist()
 
 
-    def project_point(self, r, a, r_ref=None):
+    def project_point(self, r, a):
         return cos(a) * r, sin(a) * r
 
 
@@ -165,8 +157,9 @@ class OffsetShape(Shape):
     def __post_init__(self):
         self.sk = skeletonator.Skeletonator(self.polygon)
         self.polygon = list(self.sk.outline) # normalized: counter-clockwise, without repeated points
-        if self.annular_width > self.sk.min_radius:
-            raise ValueError(f'Annular width ({self.annular_width:.2f}) is too large. Must be less than {self.sk.min_radius:.2f}')
+        if self.annular_width > self.sk.max_depth:
+            raise ValueError(f'Annular width ({self.annular_width:.2f}) is too large. Must be less than {self.sk.max_depth:.2f}')
+        self.sk.set_angle_reference(self.annular_width)
         self.outer_radius = self.sk.radius
         self.inner_radius = self.sk.radius - self.annular_width
 
@@ -182,25 +175,16 @@ class OffsetShape(Shape):
 
     def compute_spiral(self, a1, a2, fn=None, debug=False):
         # Skeletonator uses a t coordinate from 0 - 1 per revolution instead of a radian angle.
-        points = []
-        angle_refs = []
-        for point, angle_ref in self.sk.do_spiral(a1/(2*pi), a2/(2*pi), self.outer_radius, self.inner_radius, debug=debug):
-            points.append(point)
-            angle_refs.append(angle_ref)
-        if a2 < a1:
-            points = points[::-1]
-            angle_refs = angle_refs[::-1]
-        arm_length = sum(dist(p1, p2) for p1, p2 in zip(points, points[1:]))
-        return points, arm_length, angle_refs
+        return self.sk.spiral(a1/(2*pi), a2/(2*pi), 0, self.annular_width, debug=debug)
 
 
-    def project_point(self, r, a, r_ref=None):
+    def project_point(self, r, a):
         # Skeletonator uses a t coordinate from 0 - 1 per revolution instead of a radian angle.
-        return self.sk.project_point(a/(2*pi) % 1, r, r_ref=r_ref)
+        return self.sk.project_point(a/(2*pi) % 1, self.sk.radius - r)
 
 
     def offset_exterior(self, margin):
-        return self.sk.do_spiral(0, 1, self.outer_radius + margin, self.outer_radius + margin)
+        return self.sk.spiral(0, 1, -margin, -margin)[0][:-1]
 
 
 @dataclass
@@ -491,7 +475,8 @@ class PlanarInductor():
         self.logger.info(f'Fill factor: {phi:g}')
         self.logger.info(f'Approximate inductance: {self.L:g} µH')
 
-        _points, arm_length, _angle_refs = self.shape.compute_spiral(a1=0, a2=self.sector_angle)
+        points, _angles = self.shape.compute_spiral(a1=0, a2=self.sector_angle)
+        arm_length = sum(dist(p, q) for p, q in zip(points, points[1:]))
 
         self.track_length = arm_length*self.twists*self.layers
         self.logger.info(f'Approximate track length: {self.track_length:.2f} mm')
@@ -526,6 +511,7 @@ class PlanarInductor():
             inverse[i*self.turns%self.twists] = i
 
         arms_layers = [[], []]
+        debug = geometry_debug_file is not None
         # Array where we collect all gerbonara kicad line and arc objects
         for i in range(self.twists):
             start_angle = i*self.sector_angle
@@ -533,13 +519,8 @@ class PlanarInductor():
             end_angle = fold_angle + self.sweeping_angle
 
             # Handle the spiral arm
-            points_layer0, arm_length, angle_refs_layer0 = self.shape.compute_spiral(a1=start_angle, a2=fold_angle, fn=circle_segments, debug=True)
-            x0, y0 = points_layer0[0]
+            points_layer0, _ = self.shape.compute_spiral(a1=start_angle, a2=fold_angle, fn=circle_segments, debug=debug)
             xn, yn = points_layer0[-1]
-            if angle_refs_layer0:
-                ref_0, ref_n = angle_refs_layer0[0], angle_refs_layer0[-1]
-            else:
-                ref_0, ref_n = None, None
 
             if self.approximate_arcs and isinstance(self.shape, CircleShape):
                 footprint.arcs.extend(arc_approximate(points_layer0, self.trace_width, self.layer_pair[0], arc_tolerance))
@@ -548,7 +529,7 @@ class PlanarInductor():
 
             if self.layers > 1:
                 # Handle the returning arm on the bottom layer
-                points_layer1, _, angle_refs_layer1 = self.shape.compute_spiral(a1=end_angle, a2=fold_angle, fn=circle_segments, debug=True)
+                points_layer1, _ = self.shape.compute_spiral(a1=end_angle, a2=fold_angle, fn=circle_segments, debug=debug)
                 points_layer1 = points_layer1[::-1]
                 if self.approximate_arcs and isinstance(self.shape, CircleShape):
                     footprint.arcs.extend(arc_approximate(points_layer1, self.trace_width, self.layer_pair[1], arc_tolerance))
@@ -557,14 +538,12 @@ class PlanarInductor():
 
             else:
                 # Add a straight connecting segment connecting the inner point to the outside of the spiral.
-                ref = angle_refs_layer0[-1]
-                xq, yq = self.shape.project_point(self.shape.outer_radius, fold_angle, r_ref=ref)
-                angle_refs_layer1 = [ref, ref]
+                xq, yq = self.shape.project_point(self.shape.outer_radius, fold_angle)
                 points_layer1 = [(xn, yn), (xq, yq)]
                 footprint.lines.append(kicad.make_line(xn, yn, xq, yq, self.trace_width, self.layer_pair[1]))
             
-            arms_layers[0].append((points_layer0, angle_refs_layer0))
-            arms_layers[1].append((points_layer1, angle_refs_layer1))
+            arms_layers[0].append(points_layer0)
+            arms_layers[1].append(points_layer1)
 
         for i in range(self.twists):
             start_angle = i*self.sector_angle
@@ -577,10 +556,10 @@ class PlanarInductor():
                 if i%2 != 0:
                     r -= 2*self.via_offset
 
-            points_layer0, refs_layer0 = arms_layers[0][i]
-            points_layer1, refs_layer1 = arms_layers[1][i]
+            points_layer0 = arms_layers[0][i]
+            points_layer1 = arms_layers[1][i]
 
-            xv, yv = self.shape.project_point(r, fold_angle, r_ref=refs_layer0[-1])
+            xv, yv = self.shape.project_point(r, fold_angle)
 
             footprint.lines.append(kicad.make_line(*points_layer0[-1], xv, yv, self.trace_width, self.layer_pair[0]))
             footprint.lines.append(kicad.make_line(xv, yv, *points_layer1[0], self.trace_width, self.layer_pair[1]))
@@ -597,10 +576,10 @@ class PlanarInductor():
                 if i%2 != 0:
                     r += 2*self.via_offset
 
-            points_layer0, refs_layer0 = arms_layers[0][i]
-            points_layer1, refs_layer1 = arms_layers[1][(i - self.turns) % self.twists]
+            points_layer0 = arms_layers[0][i]
+            points_layer1 = arms_layers[1][(i - self.turns) % self.twists]
             
-            xv, yv = self.shape.project_point(r, start_angle, r_ref=refs_layer0[0])
+            xv, yv = self.shape.project_point(r, start_angle)
 
             footprint.lines.append(kicad.make_line(*points_layer0[0], xv, yv, self.trace_width, self.layer_pair[0]))
             footprint.lines.append(kicad.make_line(*points_layer1[-1], xv, yv, self.trace_width, self.layer_pair[1]))
