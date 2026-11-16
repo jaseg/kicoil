@@ -625,7 +625,6 @@ dependencies = [
     { name = "lxml" },
     { name = "numpy" },
     { name = "platformdirs" },
-    { name = "py-straight-skeleton" },
     { name = "shapely" },
     { name = "svgelements" },
     { name = "wasmtime" },
@@ -635,6 +634,7 @@ dependencies = [
 dev = [
     { name = "ipykernel" },
     { name = "matplotlib" },
+    { name = "py-straight-skeleton" },
 ]
 gds = [
     { name = "gdstk" },
@@ -657,7 +657,6 @@ requires-dist = [
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "platformdirs", specifier = ">=4.5.1" },
-    { name = "py-straight-skeleton", specifier = ">=0.1.0" },
     { name = "shapely", specifier = ">=2.1" },
     { name = "svgelements", specifier = ">=1.9" },
     { name = "wasmtime", specifier = ">=39.0.0" },
@@ -667,6 +666,7 @@ requires-dist = [
 dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "py-straight-skeleton", specifier = ">=0.1.0" },
 ]
 gds = [{ name = "gdstk" }]
 gui = [
