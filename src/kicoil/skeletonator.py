@@ -11,7 +11,12 @@ import sys
 import hashlib
 
 import platformdirs
+import shapely
 import wasmtime
+
+
+# Points closer than this (mm) are one point
+DUPLICATE_POINT_TOLERANCE = 1e-6
 
 
 def interpolate(p1, p2, t, t_start=0, t_end=1):
@@ -43,12 +48,12 @@ def edge_cycle(points):
     return itertools.pairwise(itertools.chain(points, points[:1]))
 
 
-def polygon_is_clockwise(points):
-    (x1, y1, i), *_rest = sorted((x, y, i) for i, (x, y) in enumerate(points))
-    x0, y0 = points[(i-1)%len(points)]
-    x2, y2 = points[(i+1)%len(points)]
-    det = (x0*y1 + x1*y2 + x2*y0) - (x2*y1 + x1*y0 + x0*y2)
-    return det < 0
+def clean_polygon(points):
+    """ The polygon as a counter-clockwise list of points without repeated points. Vertex 0 stays vertex 0. """
+    ring = shapely.remove_repeated_points(shapely.LinearRing(points), DUPLICATE_POINT_TOLERANCE)
+    if not ring.is_ccw:
+        ring = ring.reverse()
+    return list(ring.coords)[:-1]
 
 
 def polygon_center_of_mass(polygon):
@@ -132,11 +137,7 @@ class SkeletonNode:
 skeleton_wasm = WasmApp('skeleton.wasm')
 
 def compute_skeleton(exterior):
-    points_deduplicated = []
-    for p1, p2 in edge_cycle(exterior):
-        if p2 != p1:
-            points_deduplicated.append(p1)
-    input_data = '\n'.join(f'{x} {y}' for x, y in points_deduplicated)
+    input_data = '\n'.join(f'{x} {y}' for x, y in exterior)
     
     rc, data = skeleton_wasm.run(input_data)
 
@@ -170,10 +171,11 @@ def compute_skeleton(exterior):
 
 class Skeletonator:
     def __init__(self, poly):
-        self.poly = poly
-        self.poly_edges = list(zip(poly, poly[1:] + poly[:1]))
+        self.outline = clean_polygon(poly)
+        self.poly = self.outline
+        self.poly_edges = list(zip(self.poly, self.poly[1:] + self.poly[:1]))
         self.circumference = sum(math.dist(a, b) for a, b in self.poly_edges)
-        self.skeleton_nodes, self.skeleton_edges = compute_skeleton(exterior=poly)
+        self.skeleton_nodes, self.skeleton_edges = compute_skeleton(exterior=self.poly)
         self.arc_map = {}
         self.divergent = set()
         self.radius = max(n.time for n in self.skeleton_nodes)
@@ -188,7 +190,7 @@ class Skeletonator:
             p = (round(n.x, 6), round(n.y, 6))
             coord_map[p] = n
         self.node_map = {}
-        for x, y in poly:
+        for x, y in self.poly:
             p = (round(x, 6), round(y, 6))
             self.node_map[(x, y)] = coord_map[p]
         self.debug_arms = []
