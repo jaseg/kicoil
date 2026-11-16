@@ -16,11 +16,13 @@
 
 import warnings
 import logging
+import itertools
 from dataclasses import dataclass, field
 import sys
 from math import *
 
 import numpy as np
+import shapely
 
 from gerbonara.cad.kicad.footprints import Footprint
 from gerbonara.cad.kicad.primitives import Zone, Hatch, ZoneKeepout, ZonePolygon, XYCoord
@@ -29,6 +31,9 @@ from . import kicad, skeletonator
 
 
 mu_0 = 1.25663706127e-06 # from scipy.constants
+
+SPIRAL_CHORD_ERROR = 0.0005 # mm, chord error of the circular spiral center lines used for measurements
+PIECE_STEP = 0.025 # revolutions, length of the center line pieces that the turn spacing is measured on
 
 
 def point_line_distance(p, l1, l2):
@@ -98,6 +103,55 @@ def arc_approximate(points, trace_width, layer, tolerance=0.02, level=0):
             yield kicad.make_arc(x2, y2, x0, y0, x1, y1, trace_width, layer)
 
 
+def center_line_pieces(arms, step):
+    """ Cut the center lines of the arms where their angle passes a multiple of `step` revolutions. `arms` holds a
+    (points, angles in revolutions) tuple per arm. Returns the pieces as LineStrings, the arm of each piece, and the
+    lowest and highest angle of each piece. """
+    pieces, arm, lo, hi = [], [], [], []
+    for k, (points, angles) in enumerate(arms):
+        points, angles = np.array(points), np.array(angles)
+        if angles[-1] < angles[0]:
+            points, angles = points[::-1], angles[::-1]
+        # Insert the cut points into the center line, then split it there
+        cuts = np.arange(floor(angles[0] / step) + 1, ceil(angles[-1] / step)) * step
+        at = np.searchsorted(angles, cuts, side="right")
+        cut_points = np.column_stack([np.interp(cuts, angles, points[:, 0]), np.interp(cuts, angles, points[:, 1])])
+        points, angles = np.insert(points, at, cut_points, axis=0), np.insert(angles, at, cuts)
+        ends = [0, *(at + np.arange(len(at))), len(points) - 1]
+        for a, b in itertools.pairwise(ends):
+            pieces.append(shapely.LineString(points[a:b+1]))
+            arm.append(k)
+            lo.append(angles[a])
+            hi.append(angles[b])
+    return np.array(pieces), np.array(arm), np.array(lo), np.array(hi)
+
+
+def min_turn_spacing(pieces, search_radius, min_turn_separation=0.5):
+    """ Smallest distance between center line pieces of different turns, and a point where it occurs. Returns
+    (search_radius, None) if there are none closer than search_radius. """
+    geoms, arm, lo, hi = pieces
+
+    # All pairs of pieces closer than the search radius, each pair once
+    i, j = shapely.STRtree(geoms).query(geoms, predicate='dwithin', distance=search_radius)
+    keep = i < j
+    i, j = i[keep], j[keep]
+
+    # Pieces of different arms are always on different turns. Pieces of the same arm are on different turns when they
+    # are at least min_turn_separation revolutions apart.
+    angle_gap = np.maximum(lo[j] - hi[i], lo[i] - hi[j])
+    keep = (arm[i] != arm[j]) | (angle_gap >= min_turn_separation)
+    i, j = i[keep], j[keep]
+    if not len(i):
+        return search_radius, None
+
+    d = shapely.distance(geoms[i], geoms[j])
+    k = np.argmin(d)
+    if d[k] >= search_radius:
+        return search_radius, None
+    x, y = shapely.shortest_line(geoms[i[k]], geoms[j[k]]).coords[0]
+    return float(d[k]), (x, y)
+
+
 def polygon_is_clockwise(coords):
     # https://en.wikipedia.org/wiki/Curve_orientation
     xb, yb, i = min([(x, y, i) for i, (x, y) in enumerate(coords)])
@@ -132,10 +186,12 @@ class CircleShape(Shape):
         return f'{self.outer_diameter:.2f} mm OD, {self.inner_diameter:.2f} mm ID circular'
 
 
-    def compute_spiral(self, a1, a2, fn=64, debug=False):
+    def compute_spiral(self, a1, a2, fn=None, debug=False):
         """ Points of the spiral from angle a1 on the outer radius to angle a2 on the inner radius, with fn points per
         revolution, and the angle of each point in revolutions. """
         r1, r2 = self.outer_radius, self.inner_radius
+        if fn is None:
+            fn = ceil(pi / acos(1 - SPIRAL_CHORD_ERROR/self.outer_radius))
         fn = max(1, ceil(fn * abs(a2-a1)/(2*pi)))
         a = a1 + (a2 - a1) * np.arange(fn + 1) / fn
         r = r1 + (r2 - r1) * np.arange(fn + 1) / fn
@@ -394,13 +450,6 @@ class PlanarInductor():
         self.spiral_pitch = (self.shape.outer_radius-self.shape.inner_radius) / self.turns_per_layer
         self.R = None # will be calculated during render
 
-        c1 = self.shape.inner_radius
-        c2 = self.shape.inner_radius + self.spiral_pitch
-        alpha1 = atan((self.shape.outer_radius - self.shape.inner_radius) / self.sweeping_angle / c1)
-        alpha2 = atan((self.shape.outer_radius - self.shape.inner_radius) / self.sweeping_angle / c2)
-        alpha = (alpha1+alpha2)/2
-        self.projected_spiral_pitch = self.spiral_pitch*cos(alpha)
-
         if gcd(self.twists, self.turns) != 1:
             raise ValueError(f'For the geometry to work out, the twists parameter must be co-prime to turns, i.e. the two must have 1 as their greatest common divisor. You can print valid values for twists by running the kicoil CLI with --show-twists [turns number].\n\n'
                                        f'Right now, both are divisible by {gcd(self.twists, self.turns)}.\n'
@@ -410,28 +459,41 @@ class PlanarInductor():
         if (self.stagger_inner_vias or self.stagger_outer_vias) and self.twists%2 != 0:
             raise ValueError('For via staggering to work, twists must be even and turns must be odd.')
 
+        # Neighboring turns come closer than the nominal pitch where they run at an angle to the outline, and at corners,
+        # where their bends do not line up exactly. Instead of estimating this, measure the spiral center lines.
+        pp, where = self.measure_turn_spacing()
+        self.projected_spiral_pitch = pp
+        self.logger.info(f'Nominal spiral pitch {self.spiral_pitch:.3f} mm, smallest distance between turns {pp:.3f} mm.')
+        pitch_hint = ''
+        if where is not None and round(pp, 3) < round(self.spiral_pitch, 3):
+            pitch_hint = (f' The projected pitch is the smallest distance between the center lines of neighboring '
+                          f'turns, {pp:.3f} mm (nominal pitch {self.spiral_pitch:.3f} mm), measured near '
+                          f'({where[0]:.3f}, {where[1]:.3f}).')
+
         if self.trace_width is None and self.clearance is None:
             self.clearance = 0.15
-            warnings.warn(f'Warning: Neither trace width nor clearance given. Defaulting to {self.clearance:.2f} mm clearance.')
+            warnings.warn(f'Warning: Neither trace width nor clearance given. Defaulting to {self.clearance:.3f} mm clearance.')
 
         if self.trace_width is None:
-            if round(self.clearance, 3) > round(self.projected_spiral_pitch, 3):
-                warnings.warn(f'Error: Given clearance of {clearance:.2f} mm is larger than the projected spiral pitch of {projected_spiral_pitch:.2f} mm. Reduce clearance or increase the size of the coil.')
-            self.trace_width = self.projected_spiral_pitch - self.clearance
-            self.logger.info(f'Calculated trace width for {self.clearance:.2f} mm clearance is {self.trace_width:.2f} mm.')
+            if round(self.clearance, 3) >= round(pp, 3):
+                raise ValueError(f'Given clearance of {self.clearance:.3f} mm is larger than the projected spiral pitch '
+                                 f'of {pp:.3f} mm. Reduce clearance or increase the size of the coil.' + pitch_hint)
+            self.trace_width = pp - self.clearance
+            self.logger.info(f'Calculated trace width for {self.clearance:.3f} mm clearance is {self.trace_width:.3f} mm.')
+
+        elif round(self.trace_width, 3) >= round(pp, 3):
+            raise ValueError(f'Given trace width of {self.trace_width:.3f} mm is larger than the projected spiral '
+                             f'pitch of {pp:.3f} mm. Reduce trace width or increase the size of the coil.' + pitch_hint)
 
         elif self.clearance is None:
-            if round(self.trace_width, 2) > round(self.projected_spiral_pitch, 2):
-                warnings.warn(f'Error: Given trace width of {self.trace_width:.2f} mm is larger than the projected spiral pitch of {self.projected_spiral_pitch:.2f} mm. Reduce clearance or increase the size of the coil.')
-            self.clearance = self.projected_spiral_pitch - self.trace_width
-            self.logger.info(f'Calculated clearance for {self.trace_width:.2f} mm trace width is {self.clearance:.2f} mm.')
+            self.clearance = pp - self.trace_width
+            self.logger.info(f'Calculated clearance for {self.trace_width:.3f} mm trace width is {self.clearance:.3f} mm.')
 
-        else:
-            if round(self.trace_width, 2) > round(self.projected_spiral_pitch, 2):
-                raise ValueError(f'Given trace width of {self.trace_width:.2f} mm is larger than the projected spiral pitch of {self.projected_spiral_pitch:.2f} mm. Reduce clearance or increase the size of the coil.')
-            clearance_actual = self.projected_spiral_pitch - self.trace_width
-            if round(clearance_actual, 3) < round(self.clearance, 3):
-                raise ValueError(f'Actual clearance for {self.trace_width:.2f} mm trace is {clearance_actual:.2f} mm, which is lower than the given clearance of {self.clearance:.2f} mm.')
+        elif round(pp - self.trace_width, 3) < round(self.clearance, 3):
+            raise ValueError(f'Actual clearance for {self.trace_width:.3f} mm trace width is {pp - self.trace_width:.3f} '
+                             f'mm, which is lower than the given clearance of {self.clearance:.3f} mm. Reduce trace '
+                             f'width to at most {floor((pp - self.clearance) * 1000) / 1000:.3f} mm, reduce the '
+                             f'clearance or increase the size of the coil.' + pitch_hint)
 
         if round(self.via_diameter, 2) < round(self.trace_width, 2):
             self.logger.warning(f'Clipping via diameter from {self.via_diameter:.2f} mm to trace width of {self.trace_width:.2f} mm.')
@@ -488,6 +550,27 @@ class PlanarInductor():
         rho = 1.68e-8 # specific resistivity of copper
         self.R = self.track_length/1e3 * rho / A
         self.logger.info(f'Approximate resistance: {self.R:g} Ω')
+
+    def arm_angles(self, i):
+        """ Start, fold and end angle of the i'th arm pair. The arm on the first layer runs inwards from the start to the
+        fold angle, the arm on the second layer runs outwards from the fold to the end angle. """
+        start_angle = i*self.sector_angle
+        fold_angle = start_angle + self.sweeping_angle
+        end_angle = fold_angle + self.sweeping_angle
+        return start_angle, fold_angle, end_angle
+
+    def measure_turn_spacing(self):
+        """ Smallest center line distance between neighboring turns on the same layer, at most the nominal pitch, and
+        where it is (None if nothing is closer than the nominal pitch). """
+        arms = [[], []]
+        for i in range(self.twists):
+            start_angle, fold_angle, end_angle = self.arm_angles(i)
+            arms[0].append(self.shape.compute_spiral(start_angle, fold_angle))
+            arms[1].append(self.shape.compute_spiral(end_angle, fold_angle))
+        self._pieces = [center_line_pieces(layer_arms, PIECE_STEP) for layer_arms in arms[:self.layers]]
+        results = [min_turn_spacing(pieces, self.spiral_pitch * (1 + 1e-9)) for pieces in self._pieces]
+        best, where = min(results, key=lambda r: r[0])
+        return (self.spiral_pitch, None) if where is None else (min(best, self.spiral_pitch), where)
 
     @property
     def default_footprint_name(self):
