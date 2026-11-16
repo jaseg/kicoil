@@ -21,14 +21,15 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import sys
 import logging
-import warnings
+import multiprocessing
 import traceback
 from pathlib import Path
-from contextlib import contextmanager
+from functools import partial
 from io import BytesIO
 
-from .geometry import PlanarInductor, divisors, CircleShape, SectorShape, StarShape, SVGShape, RectangleShape, RegularPolygonShape, TrapezoidShape, DEFAULT_CIRCLE_SEGMENTS
+from .geometry import divisors, CircleShape, SectorShape, StarShape, SVGShape, RectangleShape, RegularPolygonShape, TrapezoidShape, DEFAULT_CIRCLE_SEGMENTS
 from .svg import make_transparent_svg
+from .worker import build_model
 
 try:
     # for rendering gerbonara's svg output to PNG
@@ -219,6 +220,11 @@ class KiCoilGUI:
                   command=self.show_valid_twists, width=20).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Save Footprint File", 
                   command=self.save_footprint_file, width=20).pack(side=tk.LEFT, padx=5)
+        self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_layout, width=10,
+                                        state='disabled')
+        self.cancel_button.pack(side=tk.LEFT, padx=5)
+        self.status_var = tk.StringVar()
+        ttk.Label(button_frame, textvariable=self.status_var, foreground='gray').pack(side=tk.LEFT, padx=5)
         #if self.kicad_inst: FIXME
         #    ttk.Button(button_frame, text="Update Footprint on Board", 
         #              command=self.update_board_footprint, width=20).pack(side=tk.LEFT, padx=5)
@@ -258,11 +264,12 @@ class KiCoilGUI:
 
         self.current_model = None
         self._validation_after_id = None
+        self.layout_process = None
 
         self.setup_logging()
         self.setup_traces()
         self.update_shape_tab_visibility()  # Initialize tab visibility
-        self.root.after(100, self.validate_parameters)
+        self.root.after(100, self.start_layout)
 
     def validate_nonnegative(self, value_if_allowed):
         """Validation callback for spinboxes to prevent negative values"""
@@ -717,22 +724,23 @@ class KiCoilGUI:
         row += 1
         
     def get_parameters(self):
-        # Create the appropriate shape based on selection
+        # Create the appropriate shape based on selection. It is constructed in the layout process: its skeleton can
+        # take long to compute.
         shape_type = self.shape_type_var.get()
 
         if shape_type == "Circle":
-            shape = CircleShape(
+            shape = partial(CircleShape,
                 outer_diameter=self.circle_outer_dia_var.get(),
                 inner_diameter=self.circle_inner_dia_var.get()
             )
         elif shape_type == "Rectangle":
-            shape = RectangleShape(
+            shape = partial(RectangleShape,
                 width=self.rect_width_var.get(),
                 height=self.rect_height_var.get(),
                 annular_width=self.rect_annular_width_var.get()
             )
         elif shape_type == "Trapezoid":
-            shape = TrapezoidShape(
+            shape = partial(TrapezoidShape,
                 width=self.trap_width_var.get(),
                 height=self.trap_height_var.get(),
                 offset=self.trap_offset_var.get(),
@@ -740,27 +748,27 @@ class KiCoilGUI:
             )
         elif shape_type == "Sector":
             import math
-            shape = SectorShape(
+            shape = partial(SectorShape,
                 inner_diameter=self.sector_inner_dia_var.get(),
                 outer_diameter=self.sector_outer_dia_var.get(),
                 angle=math.radians(self.sector_angle_var.get()),
                 annular_width=self.sector_annular_width_var.get()
             )
         elif shape_type == "Star":
-            shape = StarShape(
+            shape = partial(StarShape,
                 inner_diameter=self.star_inner_dia_var.get(),
                 outer_diameter=self.star_outer_dia_var.get(),
                 points=self.star_points_var.get(),
                 annular_width=self.star_annular_width_var.get()
             )
         elif shape_type == "Regular Polygon":
-            shape = RegularPolygonShape(
+            shape = partial(RegularPolygonShape,
                 diameter=self.poly_diameter_var.get(),
                 corners=self.poly_corners_var.get(),
                 annular_width=self.poly_annular_width_var.get()
             )
         elif shape_type == "SVG":
-            shape = SVGShape(
+            shape = partial(SVGShape,
                 filename=self.svg_filename_var.get(),
                 annular_width=self.svg_annular_width_var.get()
             )
@@ -807,22 +815,6 @@ class KiCoilGUI:
         self.kicoil_logger.handlers.clear()
         self.log_handler = TextWidgetHandler(self.output_text)
         self.kicoil_logger.addHandler(self.log_handler)
-    
-    @contextmanager
-    def capture_warnings(self):
-        """Context manager to capture kicoil's warnings to the output text widget"""
-        def show_warning(message, category, filename, lineno, file=None, line=None):
-            self.output_text['state'] = 'normal'
-            self.output_text.insert(tk.END, f'{message}\n', 'warning')
-            self.output_text.see(tk.END)
-            self.output_text['state'] = 'disabled'
-            self.output_text.update_idletasks()
-
-        old_showwarning, warnings.showwarning = warnings.showwarning, show_warning
-        try:
-            yield
-        finally:
-            warnings.showwarning = old_showwarning
     
     def setup_traces(self):
         # Shape type needs special handling for tab visibility
@@ -884,51 +876,67 @@ class KiCoilGUI:
         # Schedule validation to avoid too many rapid calls
         if self._validation_after_id is not None:
             self.root.after_cancel(self._validation_after_id)
-        self._validation_after_id = self.root.after(200, self.validate_parameters)
+        self._validation_after_id = self.root.after(200, self.start_layout)
+        self.current_model = None
     
-    def validate_parameters(self):
-        """Validate parameters by creating PlanarInductor instance"""
+    def start_layout(self):
+        """ Build the model for the current parameters in a new process, stopping the one that is running """
+        self._validation_after_id = None
+        self.stop_layout()
         try:
-            self.output_text['state'] = 'normal'
-            self.output_text.delete('1.0', tk.END)
+            params = self.get_parameters()
+        except (ValueError, tk.TclError) as e: # e.g. an empty field
+            self.show_result(None, f'Invalid parameter: {e}', [])
+            return
+        ctx = multiprocessing.get_context('spawn') # fork is not safe with Tk in this process
+        self.layout_conn, child_conn = ctx.Pipe(duplex=False)
+        self.layout_process = ctx.Process(target=build_model, args=(child_conn, params), daemon=True)
+        self.layout_process.start()
+        child_conn.close() # so that we get an EOF if the process dies
+        self.cancel_button['state'] = 'normal'
+        self.status_var.set("Computing layout...")
+        self.root.after(100, self.poll_layout, self.layout_process)
 
-            with self.capture_warnings():
-                self.current_model = PlanarInductor(**self.get_parameters())
+    def poll_layout(self, process):
+        if process is not self.layout_process: # stopped or replaced
+            return
+        if not self.layout_conn.poll():
+            self.root.after(100, self.poll_layout, process)
+            return
+        try:
+            result = self.layout_conn.recv()
+        except EOFError:
+            result = None, 'The layout process ended unexpectedly (out of memory?)', []
+        self.stop_layout()
+        self.show_result(*result)
 
-            # If we got here, parameters are valid
+    def stop_layout(self):
+        if self.layout_process is not None:
+            self.layout_process.terminate()
+            self.layout_process.join()
+            self.layout_conn.close()
+            self.layout_process = None
+        self.cancel_button['state'] = 'disabled'
+        self.status_var.set("")
+
+    def cancel_layout(self):
+        self.stop_layout()
+        self.show_result(None, 'Cancelled', [])
+
+    def show_result(self, model, error, messages):
+        self.current_model = model
+        self.output_text['state'] = 'normal'
+        self.output_text.delete('1.0', tk.END)
+        for tag, text in messages:
+            self.output_text.insert(tk.END, f'{text}\n', tag)
+        if error is None:
             self.output_text.insert(tk.END, "Parameters valid\n", 'info')
-            self.update_placeholders()
-            self.update_preview()
-            return True
-
-        except ValueError as e:
-            self.output_text['state'] = 'normal'
-            self.output_text.insert(tk.END, f"ERROR: {e}\n", 'error')
-            self.output_text.see(tk.END)
-            
-            tb = traceback.format_exc()
-            print(tb, file=sys.stderr)
-
-            self.current_model = None
-            self.update_placeholders()
-            self.update_preview()
-            return False
-            
-        except Exception as e:
-            tb = traceback.format_exc()
-            self.output_text['state'] = 'normal'
-            self.output_text.insert(tk.END, f"Unexpected error:\n{tb}\n", 'error')
-            self.output_text.see(tk.END)
-
-            print(tb, file=sys.stderr)
-
-            self.current_model = None
-            self.update_placeholders()
-            self.update_preview()
-            return False
-
-        finally:
-            self.output_text['state'] = 'disabled'
+        else:
+            self.output_text.insert(tk.END, f"ERROR: {error}\n", 'error')
+        self.output_text.see(tk.END)
+        self.output_text['state'] = 'disabled'
+        self.update_placeholders()
+        self.update_preview()
 
     def update_placeholders(self):
         if self.current_model is None:
@@ -993,8 +1001,8 @@ class KiCoilGUI:
         self.output_text['state'] = 'disabled'
     
     def update_board_footprint(self):
-        if not self.validate_parameters():
-            messagebox.showerror("Error", "Cannot generate model. Please check the output for warnings or errors.")
+        if self.current_model is None:
+            messagebox.showerror("Error", "No layout. Please wait for it or check the output for warnings or errors.")
             return
 
         from kipy.board_types import FootprintInstance, Footprint, Pad, BoardArc, BoardSegment, FootprintAttributes,\
@@ -1073,8 +1081,8 @@ class KiCoilGUI:
         self.output_text.see(tk.END)
 
     def save_footprint_file(self):
-        if not self.validate_parameters():
-            messagebox.showerror("Error", "Cannot generate model. Please check the output for warnings or errors.")
+        if self.current_model is None:
+            messagebox.showerror("Error", "No layout. Please wait for it or check the output for warnings or errors.")
             return
         
         try:
