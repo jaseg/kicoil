@@ -64,8 +64,7 @@ def arc_approximate(points, trace_width, layer, tolerance=0.02, level=0):
     approximate the arc using straight line segments.
 
     The input to this function is a list of points of a straight line segment approximation, and it returns a list of
-    gerbonara arc objects approximating the input. """ 
-    indent = '    ' * level
+    gerbonara arc objects approximating the input. """
     if len(points) < 3:
         raise ValueError('Need at least three points to approximate')
 
@@ -77,13 +76,16 @@ def arc_approximate(points, trace_width, layer, tolerance=0.02, level=0):
 
     if len(points) < 5:
         yield kicad.make_arc(x0, y0, x2, y2, x1, y1, trace_width, layer)
+        return
 
     # https://stackoverflow.com/questions/56224824/how-do-i-find-the-circumcenter-of-the-triangle-using-python-without-external-lib
     d = 2 * (x0 * (y2 - y1) + x2 * (y1 - y0) + x1 * (y0 - y2))
-    cx = ((x0 * x0 + y0 * y0) * (y2 - y1) + (x2 * x2 + y2 * y2) * (y1 - y0) + (x1 * x1 + y1 * y1) * (y0 - y2)) / d
-    cy = ((x0 * x0 + y0 * y0) * (x1 - x2) + (x2 * x2 + y2 * y2) * (x0 - x1) + (x1 * x1 + y1 * y1) * (x2 - x0)) / d
-    r = dist((cx, cy), (x1, y1))
-    if any(abs(dist((px, py), (cx, cy)) - r) > tolerance for px, py in points):
+    if abs(d) > 1e-12:
+        cx = ((x0 * x0 + y0 * y0) * (y2 - y1) + (x2 * x2 + y2 * y2) * (y1 - y0) + (x1 * x1 + y1 * y1) * (y0 - y2)) / d
+        cy = ((x0 * x0 + y0 * y0) * (x1 - x2) + (x2 * x2 + y2 * y2) * (x0 - x1) + (x1 * x1 + y1 * y1) * (x2 - x0)) / d
+        r = dist((cx, cy), (x1, y1))
+    if abs(d) <= 1e-12 or any(abs(dist((px, py), (cx, cy)) - r) > tolerance for px, py in points):
+        # (Collinear points are split until the pieces are short enough to be emitted as nearly straight arcs)
         yield from arc_approximate(points[:i_mid+1], trace_width, layer, tolerance, level+1)
         yield from arc_approximate(points[i_mid:], trace_width, layer, tolerance, level+1)
 
