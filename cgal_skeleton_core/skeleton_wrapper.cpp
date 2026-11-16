@@ -10,6 +10,9 @@
 #include <string>
 #include <memory>
 #include <iomanip>
+#include <new>
+#include <cstdio>
+#include <cstdlib>
 
 // Use exact rational arithmetic throughout to avoid filtered predicates
 typedef boost::multiprecision::number<boost::multiprecision::rational_adaptor<boost::multiprecision::cpp_int_backend<>>> Exact_NT;
@@ -25,8 +28,18 @@ typedef CGAL::Polygon_2<K>           Polygon_2;
 typedef CGAL::Straight_skeleton_2<K> Ss;
 typedef std::shared_ptr<Ss>          SsPtr;
 
+// Exceptions abort in the wasm build (exception_stubs.cpp), so std::bad_alloc cannot be caught.
+static void out_of_memory()
+{
+    std::fputs("Out of memory while computing the straight skeleton. Simplify the outline (fewer vertices, fewer "
+               "concave corners).\n", stderr);
+    std::exit(EXIT_FAILURE);
+}
+
 int main()
 {
+    std::set_new_handler(out_of_memory);
+
     Polygon_2 poly;
     std::string line;
 
@@ -48,6 +61,11 @@ int main()
 
     if (poly.size() < 3) {
         std::cerr << "Error: Polygon must have at least 3 vertices" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    if (!poly.is_simple()) {
+        std::cerr << "The outline is not a simple polygon: it crosses or touches itself." << std::endl;
         return EXIT_FAILURE;
     }
 
