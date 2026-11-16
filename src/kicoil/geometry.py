@@ -315,7 +315,6 @@ class RegularPolygonShape(OffsetShape):
         pt = lambda r, a: (-r*sin(a), r*cos(a))
         circle = lambda r, n, phase: [pt(r, (i + phase)*2*pi/n) for i in range(n)]
         self.polygon  = list(circle(self.diameter/2, self.corners, 0))
-        print(self.polygon)
         super().__post_init__()
     
     @property
