@@ -271,17 +271,23 @@ class Skeletonator:
         if max_depth == self.ref_depth:
             return
         self.ref_depth = max_depth
+        self._set_edge_spans(self._min_edge_lengths(max_depth))
+
+    def _min_edge_lengths(self, max_depth):
+        """ Shortest length of every edge over the depths from 0 to max_depth. Edges that (nearly) collapse get exactly
+        0, so that ties in _locate are exact. If everything collapses, the lengths on the outline. """
         depths = np.linspace(0, max_depth, ANGLE_REFERENCE_SAMPLES)
         positions = np.array([[self.track_position(i, d) for d in depths] for i in range(len(self.poly))])
         lengths = np.linalg.norm(np.roll(positions, -1, axis=0) - positions, axis=2)
         min_len = lengths.min(axis=1)
-        # Edges that (nearly) collapse get a span of exactly zero, so that ties in _locate are exact
         min_len[min_len <= 1e-9 * lengths[:, 0].sum()] = 0
-        if not min_len.any(): # everything collapses at max_depth
-            min_len = lengths[:, 0]
+        return min_len if min_len.any() else lengths[:, 0]
+
+    def _set_edge_spans(self, lengths):
+        """ Set vertex_angles and edge_spans so that each edge's angle span is proportional to its entry in lengths. """
         # Quantized to a binary grid, so that `revolution + angle` is exact and ties between vertices of a collapsing
         # group compare exactly. Vertices at the end sharing their angle with vertex 0 get an angle of exactly 1.
-        angles = np.concatenate([[0], np.cumsum(min_len[:-1]) / min_len.sum()])
+        angles = np.concatenate([[0], np.cumsum(lengths[:-1]) / np.sum(lengths)])
         angles = np.round(angles * ANGLE_GRID) / ANGLE_GRID
         self.vertex_angles = [1.0 if 1.0 - a < 1e-12 else a for a in angles.tolist()]
         self.edge_spans = [b - a for a, b in itertools.pairwise(self.vertex_angles + [1.0])]
