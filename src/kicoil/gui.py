@@ -27,7 +27,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from io import BytesIO
 
-from .geometry import PlanarInductor, divisors, CircleShape, SectorShape, StarShape, SVGShape, RectangleShape, RegularPolygonShape, TrapezoidShape
+from .geometry import PlanarInductor, divisors, CircleShape, SectorShape, StarShape, SVGShape, RectangleShape, RegularPolygonShape, TrapezoidShape, DEFAULT_CIRCLE_SEGMENTS
 from .svg import make_transparent_svg
 
 try:
@@ -693,20 +693,10 @@ class KiCoilGUI:
 
         # Circle Segments
         ttk.Label(parent, text="Circle Segments:").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.circle_segments_var = tk.IntVar(value=64)
-        ttk.Spinbox(parent, from_=8, to=360, textvariable=self.circle_segments_var,
-                   width=15,
-                   validate='key', validatecommand=(self.validate_nonneg_cmd, '%P')).grid(row=row, column=1, sticky=tk.W, pady=5)
-        ttk.Label(parent, text="Points per 360° for arc interpolation",
+        self.circle_segments_entry = EntryWithPlaceholder(parent, placeholder=str(DEFAULT_CIRCLE_SEGMENTS), width=15)
+        self.circle_segments_entry.grid(row=row, column=1, sticky=tk.W, pady=5)
+        ttk.Label(parent, text="Points per 360° for circles",
                  foreground='gray').grid(row=row, column=2, sticky=tk.W, padx=(10, 0))
-        row += 1
-
-        # Arc Tolerance
-        ttk.Label(parent, text="Arc Tolerance (mm):").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.arc_tolerance_var = tk.DoubleVar(value=0.02)
-        ttk.Spinbox(parent, from_=0.001, to=1.0, increment=0.001, format="%.3f",
-                   textvariable=self.arc_tolerance_var, width=15,
-                   validate='key', validatecommand=(self.validate_nonneg_cmd, '%P')).grid(row=row, column=1, sticky=tk.W, pady=5)
         row += 1
 
         # Keepout Zone
@@ -805,6 +795,10 @@ class KiCoilGUI:
             params['via_offset'] = float(via_offset_value)
 
         return params
+
+    def get_circle_segments(self):
+        circle_segments = self.circle_segments_entry.get()
+        return int(circle_segments) if circle_segments else DEFAULT_CIRCLE_SEGMENTS
     
     def setup_logging(self):
         """Set up logging handler to capture kicoil logger output for display in the output text widget"""
@@ -880,7 +874,7 @@ class KiCoilGUI:
 
         for entry in [self.trace_width_entry, self.clearance_entry,
                       self.via_drill_entry, self.via_offset_entry,
-                      self.footprint_name_entry]:
+                      self.footprint_name_entry, self.circle_segments_entry]:
             entry.bind('<KeyRelease>', lambda e: self._on_parameter_change())
 
         # SVG filename entry needs special handling
@@ -971,10 +965,7 @@ class KiCoilGUI:
             self.preview_image = None
             return
 
-        arc_tolerance = self.arc_tolerance_var.get()
-        circle_segments = self.circle_segments_var.get()
-
-        footprint = self.current_model.render_footprint(None, arc_tolerance, circle_segments)
+        footprint = self.current_model.render_footprint(None, self.get_circle_segments())
         svg_tag = make_transparent_svg(footprint)
         viewbox = svg_tag.attrs.get('viewBox', '0 0 800 800')
         _, _, svg_width, svg_height = map(float, viewbox.split())
@@ -1028,14 +1019,12 @@ class KiCoilGUI:
         selected_footprint, = selected
 
         footprint_name = self.footprint_name_entry.get() or None
-        arc_tolerance = self.arc_tolerance_var.get()
-        circle_segments = self.circle_segments_var.get()
 
         self.output_text['state'] = 'normal'
         self.output_text.insert(tk.END, "Rendering footprint...\n", 'info')
         self.output_text.see(tk.END)
 
-        model = self.current_model.render_footprint(footprint_name, arc_tolerance, circle_segments)
+        model = self.current_model.render_footprint(footprint_name, self.get_circle_segments())
         selected_footprint.attributes.exclude_from_bill_of_materials = True
         layer_map = {v: k for k, v in CANONICAL_LAYER_NAMES.items()}
         items = []
@@ -1090,13 +1079,11 @@ class KiCoilGUI:
         
         try:
             footprint_name = self.footprint_name_entry.get() or None
-            arc_tolerance = self.arc_tolerance_var.get()
-            circle_segments = self.circle_segments_var.get()
-
+    
             self.output_text['state'] = 'normal'
             self.output_text.insert(tk.END, "Rendering footprint...\n\n", 'info')
 
-            footprint = self.current_model.render_footprint(footprint_name, arc_tolerance, circle_segments)
+            footprint = self.current_model.render_footprint(footprint_name, self.get_circle_segments())
             default_name = footprint_name or self.current_model.default_footprint_name
             output_file = filedialog.asksaveasfilename(
                 title="Save KiCad Footprint",

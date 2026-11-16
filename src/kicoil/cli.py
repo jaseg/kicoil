@@ -29,7 +29,7 @@ import click
 from gerbonara.layers import LayerStack
 from gerbonara.cad.kicad.primitives import kicad_mid_to_center_arc
 
-from .geometry import PlanarInductor, divisors, CircleShape, SectorShape, StarShape, SVGShape, RectangleShape, RegularPolygonShape, TrapezoidShape
+from .geometry import PlanarInductor, DEFAULT_CIRCLE_SEGMENTS, divisors, CircleShape, SectorShape, StarShape, SVGShape, RectangleShape, RegularPolygonShape, TrapezoidShape
 from .kicad import footprint_to_board
 from .svg import make_transparent_svg
 
@@ -82,8 +82,7 @@ def circle_center_to_tangents(center, a, b):
 @click.option('--keepout-zone/--no-keepout-zone', default=True, help='Add a keepout are to the footprint (default: yes)')
 @click.option('--keepout-margin', type=float, default=5, help='Margin between outside of coil and keepout area (mm, default: 5)')
 @click.option('--copper-thickness', type=float, default=0.035, help='Copper thickness for resistance calculation, in mm. Default: 0.035mm ^= 1 Oz')
-@click.option('--circle-segments', type=int, default=64, help='When not using arcs, the number of points to use for arc interpolation per 360 degrees.')
-@click.option('--arc-tolerance', type=float, default=0.02)
+@click.option('--circle-segments', type=int, default=DEFAULT_CIRCLE_SEGMENTS, help=f'Number of points per 360 degrees for circular coils. Arcs are fitted to the same accuracy. Default: {DEFAULT_CIRCLE_SEGMENTS}')
 @click.option('--approximate-arcs/--no-approximate-arcs', default=True, help='Use circular arcs to smoothen output shape (default: on)')
 @click.option('--format', type=click.Choice(['svg', 'gerber', 'kicad-footprint', 'kicad-pcb', 'json', 'gdsii', 'oasis', 'show']), default='kicad-footprint')
 @click.option('--clipboard/--no-clipboard', help='Use clipboard integration (requires wl-clipboard)')
@@ -93,13 +92,13 @@ def circle_center_to_tangents(center, a, b):
 @click.option('--geometry-debug-file', type=click.Path(writable=True), help='Render geometry debug information to a PDF file with the given name')
 @click.version_option()
 @click.pass_context
-def cli(ctx, footprint_name, cell_name, clipboard, single_layer, arc_tolerance, circle_segments, format, geometry_debug_file, **kwargs):
+def cli(ctx, footprint_name, cell_name, clipboard, single_layer, circle_segments, format, geometry_debug_file, **kwargs):
     ctx.ensure_object(dict)
     logger = logging.getLogger('kicoil')
     logger.setLevel(logging.INFO)
 
     def write(shape, outfile):
-        nonlocal footprint_name, clipboard, single_layer, arc_tolerance, circle_segments, format, cell_name, geometry_debug_file
+        nonlocal footprint_name, clipboard, single_layer, circle_segments, format, cell_name, geometry_debug_file
         logger = logging.getLogger('kicoil')
 
         if single_layer:
@@ -113,7 +112,7 @@ def cli(ctx, footprint_name, cell_name, clipboard, single_layer, arc_tolerance, 
             if footprint_name is None and outfile:
                 footprint_name = outfile.stem
 
-            footprint = model.render_footprint(footprint_name, arc_tolerance, circle_segments, geometry_debug_file)
+            footprint = model.render_footprint(footprint_name, circle_segments, geometry_debug_file)
 
         except ValueError as e:
             #raise click.ClickException(*e.args)
@@ -324,7 +323,6 @@ def sector(ctx, outfile, angle, **kwargs):
 @click.option('--inner-diameter', type=float, default=25, help='Inner diameter [mm]')
 @click.option('--outer-diameter', type=float, default=50, help='Outer diameter [mm]')
 @click.option('--points', type=int, default=5, help='Number of points')
-@click.option('--arc-tolerance', type=float, default=0.05, help='Tolerance for splitting arc into straight segments [mm] (default: 0.05 mm)')
 @click.option('--annular-width', type=float, default=5, help='Width of the trace area on the outside of the shape [mm]')
 @click.argument('outfile', required=False, type=click.Path(writable=True, dir_okay=False, path_type=Path))
 @click.pass_context
